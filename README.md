@@ -97,6 +97,11 @@ If `dep-hallucinator` is unavailable for your ecosystem, substitute with manual 
 - **Max retries** — Default 3, set in `ralph.sh` (`MAX_RETRIES`).
 - **Max iterations** — Default 30, passed as argument to `ralph.sh`.
 
+## Credits
+
+- [The Ralph Loop](https://ghuntley.com/loop/) by Geoff Huntley — the original pattern this template is built around
+- [Compound Engineering](https://every.to/source-code/compound-engineering-the-definitive-guide) by Every — the guide to making every unit of AI-assisted work compound into the next
+
 ## License
 
 MIT
