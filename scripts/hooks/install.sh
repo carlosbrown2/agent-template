@@ -1,0 +1,93 @@
+#!/bin/bash
+# Install pre-commit hooks for structural constraint enforcement.
+# Run this once after cloning a project created from this template.
+#
+# Hooks installed:
+#   1. Scope enforcement — rejects commits touching files outside the current bead's scope
+#   2. CLAUDE.md size guard — rejects commits pushing CLAUDE.md beyond the line limit
+#   3. Dependency hallucination check — validates new packages against registries
+#
+# Usage: ./scripts/hooks/install.sh
+
+set -euo pipefail
+
+HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$HOOKS_DIR/../.." && pwd)"
+GIT_HOOKS_DIR="$PROJECT_ROOT/.git/hooks"
+
+if [ ! -d "$GIT_HOOKS_DIR" ]; then
+  echo "Error: .git/hooks not found. Run 'git init' first."
+  exit 1
+fi
+
+# --- Pre-commit hook ---
+cat > "$GIT_HOOKS_DIR/pre-commit" << 'HOOK_EOF'
+#!/bin/bash
+# Pre-commit hook: structural constraint enforcement
+set -euo pipefail
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+CLAUDE_MD="$PROJECT_ROOT/CLAUDE.md"
+CLAUDE_MD_MAX_LINES=200
+
+# --- CLAUDE.md size guard ---
+if git diff --cached --name-only | grep -q "^CLAUDE.md$"; then
+  line_count=$(git show :CLAUDE.md 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$line_count" -gt "$CLAUDE_MD_MAX_LINES" ]; then
+    echo "BLOCKED: CLAUDE.md has $line_count lines (max $CLAUDE_MD_MAX_LINES)."
+    echo "  Move domain-specific knowledge to docs/skills/ instead."
+    exit 1
+  fi
+fi
+
+# --- Dependency hallucination check ---
+# Uncomment the lines below after installing dep-hallucinator:
+#   pip install dep-hallucinator   (Python)
+#   npm install -g dep-hallucinator (Node)
+#
+# MANIFEST_FILES=$(git diff --cached --name-only | grep -E '(requirements.*\.txt|package\.json|pyproject\.toml|Cargo\.toml|go\.mod)' || true)
+# if [ -n "$MANIFEST_FILES" ]; then
+#   if command -v dep-hallucinator &>/dev/null; then
+#     dep-hallucinator check $MANIFEST_FILES || {
+#       echo "BLOCKED: Dependency hallucination check failed."
+#       exit 1
+#     }
+#   else
+#     echo "WARNING: dep-hallucinator not installed. Skipping dependency validation."
+#     echo "  Install: pip install dep-hallucinator"
+#   fi
+# fi
+
+# --- Scope enforcement (bead-level) ---
+# This is enforced by convention. The bead description declares in-scope
+# files/directories. To enable hard enforcement, uncomment and configure:
+#
+# SCOPE_FILE="$PROJECT_ROOT/.current-bead-scope"
+# if [ -f "$SCOPE_FILE" ]; then
+#   ALLOWED_PATHS=$(cat "$SCOPE_FILE")
+#   CHANGED_FILES=$(git diff --cached --name-only)
+#   for file in $CHANGED_FILES; do
+#     in_scope=false
+#     for pattern in $ALLOWED_PATHS; do
+#       if [[ "$file" == $pattern* ]]; then
+#         in_scope=true
+#         break
+#       fi
+#     done
+#     if [ "$in_scope" = false ]; then
+#       echo "BLOCKED: $file is outside the current bead's declared scope."
+#       echo "  Allowed paths: $ALLOWED_PATHS"
+#       exit 1
+#     fi
+#   done
+# fi
+
+exit 0
+HOOK_EOF
+
+chmod +x "$GIT_HOOKS_DIR/pre-commit"
+
+echo "Pre-commit hooks installed successfully."
+echo "  - CLAUDE.md size guard (active)"
+echo "  - Dependency hallucination check (commented out — uncomment after installing dep-hallucinator)"
+echo "  - Scope enforcement (commented out — uncomment to enable)"
