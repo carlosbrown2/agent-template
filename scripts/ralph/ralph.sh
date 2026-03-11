@@ -311,6 +311,14 @@ RETRY_EOF
     fi
   fi
 
+  # --- Gate result extraction ---
+  GATE_RESULT="skipped"
+  if echo "$OUTPUT" | grep -q '<gate-result>PASS</gate-result>'; then
+    GATE_RESULT="PASS"
+  elif echo "$OUTPUT" | grep -q '<gate-result>FAIL</gate-result>'; then
+    GATE_RESULT="FAIL"
+  fi
+
   # --- Confidence routing ---
   CONFIDENCE=$(parse_confidence "$OUTPUT")
   if [[ -n "$CONFIDENCE" ]]; then
@@ -318,7 +326,7 @@ RETRY_EOF
     AUTO_LAND=$(should_auto_land "$CONFIDENCE" "$POLICY")
 
     # Log every routing decision for auditability
-    echo "[$(date -Iseconds)] iter=$i bead_done=$BEAD_DONE confidence=$CONFIDENCE policy=$POLICY auto_land=$AUTO_LAND" >> "$CONFIDENCE_LOG"
+    echo "[$(date -Iseconds)] iter=$i bead=${ACTIVE_BEAD:-unknown} bead_done=$BEAD_DONE confidence=$CONFIDENCE policy=$POLICY auto_land=$AUTO_LAND gate_result=$GATE_RESULT" >> "$CONFIDENCE_LOG"
 
     if [[ "$AUTO_LAND" == "true" ]]; then
       echo "Auto-land: confidence=$CONFIDENCE, policy=$POLICY"
@@ -328,7 +336,7 @@ RETRY_EOF
       read -r
     fi
   else
-    echo "[$(date -Iseconds)] iter=$i bead_done=$BEAD_DONE confidence=NONE (no signal detected)" >> "$CONFIDENCE_LOG"
+    echo "[$(date -Iseconds)] iter=$i bead=${ACTIVE_BEAD:-unknown} bead_done=$BEAD_DONE confidence=NONE (no signal detected) gate_result=$GATE_RESULT" >> "$CONFIDENCE_LOG"
   fi
 
   echo "Iteration $i complete. Continuing..."

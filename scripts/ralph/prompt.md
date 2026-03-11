@@ -106,7 +106,15 @@ Learning feedback loop — extract lessons from a review+pare cycle into durable
 1. Close the issue: `bd close <id>`
 2. Remove the bead type marker: `rm -f .current-bead-type`
 3. Append progress to `scripts/ralph/archive.txt` (format below)
-4. Emit a confidence signal for the completed bead:
+4. Emit a verification gate result:
+
+```
+<gate-result>PASS|FAIL</gate-result>
+```
+
+Emit `PASS` if the verification gate (from CLAUDE.md) succeeded, `FAIL` if it did not. This is logged for post-mortem analysis.
+
+5. Emit a confidence signal for the completed bead:
 
 ```
 <confidence level="HIGH|MEDIUM|LOW">One-line rationale</confidence>

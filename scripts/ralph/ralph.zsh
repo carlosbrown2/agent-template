@@ -214,20 +214,68 @@ RETRY_EOF
     break
   fi
 
-  # Check for bead-done signal (one bead completed, more work may remain)
+  # --- Exit signal routing ---
   BEAD_DONE=false
+
+  # Determine the current in-progress bead for signal handling
+  ACTIVE_BEAD=$(bd list --status=in_progress 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+
   if echo "$OUTPUT" | grep -q "<promise>BEAD_DONE</promise>"; then
     BEAD_DONE=true
     FAIL_COUNT=0
     LAST_FAILED_BEAD=""
     rm -f "$RETRY_STATE_FILE"
     echo "Bead completed successfully at iteration $i."
+
+  elif echo "$OUTPUT" | grep -q "<promise>BLOCKED</promise>"; then
+    # --- BLOCKED: agent hit an external/architectural blocker ---
+    BLOCKED_REASON=$(echo "$OUTPUT" | sed -n 's/.*<blocked-reason>\(.*\)<\/blocked-reason>.*/\1/p' | head -1)
+    BLOCKED_REASON="${BLOCKED_REASON:-No reason provided}"
+
+    echo "BLOCKED at iteration $i: $BLOCKED_REASON"
+
+    if [[ -n "$ACTIVE_BEAD" ]]; then
+      bd update "$ACTIVE_BEAD" --status open 2>/dev/null || true
+      BLOCKER_TITLE="BLOCKED: $ACTIVE_BEAD — $BLOCKED_REASON"
+      bd create --title="$BLOCKER_TITLE" --type=bug --priority=1 2>/dev/null || true
+      echo "  Unclaimed $ACTIVE_BEAD and filed blocker bead."
+    fi
+
+    echo "[$(date -Iseconds)] iter=$i BLOCKED bead=${ACTIVE_BEAD:-unknown} reason=$BLOCKED_REASON" >> "$CONFIDENCE_LOG"
+    FAIL_COUNT=0
+    LAST_FAILED_BEAD=""
+    rm -f "$RETRY_STATE_FILE"
+
+  elif echo "$OUTPUT" | grep -q "<promise>REWORK_REQUIRED</promise>"; then
+    # --- REWORK_REQUIRED: prior bead's work is insufficient ---
+    REWORK_REASON=$(echo "$OUTPUT" | sed -n 's/.*<rework-reason>\(.*\)<\/rework-reason>.*/\1/p' | head -1)
+    REWORK_REASON="${REWORK_REASON:-No reason provided}"
+
+    echo "REWORK REQUIRED at iteration $i: $REWORK_REASON"
+
+    if [[ -n "$ACTIVE_BEAD" ]]; then
+      # Unclaim the current bead (review/pare/compound that can't proceed)
+      bd update "$ACTIVE_BEAD" --status open 2>/dev/null || true
+
+      # Find and re-open the prerequisite bead
+      PREREQ_BEAD=$(bd deps "$ACTIVE_BEAD" 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+      if [[ -n "$PREREQ_BEAD" ]]; then
+        bd update "$PREREQ_BEAD" --status open 2>/dev/null || true
+        echo "  Re-opened prerequisite $PREREQ_BEAD for rework."
+      fi
+      echo "  Unclaimed $ACTIVE_BEAD pending rework."
+    fi
+
+    echo "[$(date -Iseconds)] iter=$i REWORK bead=${ACTIVE_BEAD:-unknown} reason=$REWORK_REASON" >> "$CONFIDENCE_LOG"
+    FAIL_COUNT=0
+    LAST_FAILED_BEAD=""
+    rm -f "$RETRY_STATE_FILE"
+
   else
-    echo "WARNING: No BEAD_DONE signal detected at iteration $i. Agent may have stopped unexpectedly."
+    echo "WARNING: No exit signal detected at iteration $i. Agent may have stopped unexpectedly."
 
     # --- Retry tracking ---
-    # Determine which bead failed (re-check in case agent claimed one during this iteration)
-    FAILED_BEAD=$(bd list --status=in_progress 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+    FAILED_BEAD="$ACTIVE_BEAD"
 
     if [[ -n "$FAILED_BEAD" ]]; then
       if [[ "$FAILED_BEAD" == "$LAST_FAILED_BEAD" ]]; then
@@ -263,6 +311,14 @@ RETRY_EOF
     fi
   fi
 
+  # --- Gate result extraction ---
+  GATE_RESULT="skipped"
+  if echo "$OUTPUT" | grep -q '<gate-result>PASS</gate-result>'; then
+    GATE_RESULT="PASS"
+  elif echo "$OUTPUT" | grep -q '<gate-result>FAIL</gate-result>'; then
+    GATE_RESULT="FAIL"
+  fi
+
   # --- Confidence routing ---
   CONFIDENCE=$(parse_confidence "$OUTPUT")
   if [[ -n "$CONFIDENCE" ]]; then
@@ -270,7 +326,7 @@ RETRY_EOF
     AUTO_LAND=$(should_auto_land "$CONFIDENCE" "$POLICY")
 
     # Log every routing decision for auditability
-    echo "[$(date -Iseconds)] iter=$i bead_done=$BEAD_DONE confidence=$CONFIDENCE policy=$POLICY auto_land=$AUTO_LAND" >> "$CONFIDENCE_LOG"
+    echo "[$(date -Iseconds)] iter=$i bead=${ACTIVE_BEAD:-unknown} bead_done=$BEAD_DONE confidence=$CONFIDENCE policy=$POLICY auto_land=$AUTO_LAND gate_result=$GATE_RESULT" >> "$CONFIDENCE_LOG"
 
     if [[ "$AUTO_LAND" == "true" ]]; then
       echo "Auto-land: confidence=$CONFIDENCE, policy=$POLICY"
@@ -280,7 +336,7 @@ RETRY_EOF
       read -r
     fi
   else
-    echo "[$(date -Iseconds)] iter=$i bead_done=$BEAD_DONE confidence=NONE (no signal detected)" >> "$CONFIDENCE_LOG"
+    echo "[$(date -Iseconds)] iter=$i bead=${ACTIVE_BEAD:-unknown} bead_done=$BEAD_DONE confidence=NONE (no signal detected) gate_result=$GATE_RESULT" >> "$CONFIDENCE_LOG"
   fi
 
   echo "Iteration $i complete. Continuing..."
