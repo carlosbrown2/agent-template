@@ -2,27 +2,36 @@
 # Install pre-commit hooks for structural constraint enforcement.
 # Run this once after cloning a project created from Initializer.
 #
-# Hooks installed:
-#   1. Scope enforcement — rejects commits touching files outside the current bead's
+# Hooks installed (pre-commit, in execution order inside the hook):
+#   1. CLAUDE.md size guard — rejects commits pushing CLAUDE.md beyond the line limit
+#      (default 200). Domain knowledge belongs in docs/skills/, not the constitution.
+#   2. Dependency hallucination check — validates new packages against registries.
+#      Ships COMMENTED OUT; uncomment after installing dep-hallucinator.
+#   3. Bead type fail-closed gate — when a bead is in_progress, .current-bead-type
+#      must exist and hold one of impl|review|pare|compound|research. Closes the
+#      "forget the marker → no enforcement" bypass for the hooks below.
+#   4. Review/research bead write-protection — when .current-bead-type is review or
+#      research, only files under docs/reviews/ may change.
+#   5. Scope enforcement — rejects commits touching files outside the current bead's
 #      declared scope (.current-bead-scope). Always-allowed infrastructure paths are
 #      exempt. impl/pare/compound beads MUST have a scope file or the hook blocks.
-#   2. CLAUDE.md size guard — rejects commits pushing CLAUDE.md beyond the line limit
-#   3. Dependency hallucination check — validates new packages against registries
-#   4. Failure-mode register integrity — every row in docs/failure-modes.md must have an
+#   6. Failure-mode register integrity — every row in docs/failure-modes.md must have an
 #      acceptable Status (covered | proven-impossible | out-of-scope), and every check
-#      file it references must exist
-#   5. Decision register integrity — docs/decision-register.md must contain the baseline
+#      file it references must exist on disk.
+#   7. Decision register integrity — docs/decision-register.md must contain the baseline
 #      decision points (Solution selection, Acceptance interpretation, Sampling variance,
 #      Verification truth, Scope creep), every row must have ≥5 columns and an acceptable
-#      Status (bounded | agent-discretion | escalation-only), and every bounding-mechanism
-#      file path it references must exist on disk
-#   6. Review artifact validator — when .current-bead-type=review, files staged in
+#      Status (bounded | ritual-bounded | agent-discretion | escalation-only), and every
+#      bounding-mechanism file path it references must exist on disk.
+#   8. Review artifact validator — when .current-bead-type=review, files staged in
 #      docs/reviews/ must cite docs/skills/review-rubric.md AND contain at least one
-#      severity clause citation (P1.foo, P2.foo, P3.foo)
-#   7. CLAUDE.md model-tag validator — every entry under ## Discovered Patterns in
-#      CLAUDE.md must carry a `model:` tag identifying its source model
-#   8. Review/research bead write-protection — when .current-bead-type is review or
-#      research, only files under docs/reviews/ may change
+#      severity clause citation (P1.foo, P2.foo, P3.foo).
+#   9. CLAUDE.md model-tag validator — every entry under ## Discovered Patterns in
+#      CLAUDE.md must carry a `model:` tag identifying its source model.
+#
+# Also installed:
+#   commit-msg: enforces "<type>: ..." prefix on every commit message
+#               (feat|fix|refactor|review|compound|research|docs|chore|test).
 #
 # Usage: ./scripts/hooks/install.sh
 
@@ -156,7 +165,6 @@ INFRA_PATHS=(
   "scripts/ralph/archive.txt"
   "scripts/ralph/patterns.md"
   "scripts/ralph/retry_state.json"
-  "progress.txt"
   ".current-bead-type"
   ".current-bead-scope"
 )

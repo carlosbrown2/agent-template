@@ -20,6 +20,11 @@ command -v bd >/dev/null 2>&1 || {
   echo "  Then run: bd init"
   return 1
 }
+command -v jq >/dev/null 2>&1 || {
+  echo "Error: 'jq' is not installed."
+  echo "  Install: brew install jq"
+  return 1
+}
 
 # Parse arguments
 TOOL="claude"  # Default to claude
@@ -58,15 +63,11 @@ PATTERNS_FILE="$SCRIPT_DIR/patterns.md"
 ARCHIVE_FILE="$SCRIPT_DIR/archive.txt"
 CONFIDENCE_LOG="$SCRIPT_DIR/confidence.log"
 RETRY_STATE_FILE="$SCRIPT_DIR/retry_state.json"
-COMPACT_SCRIPT="$SCRIPT_DIR/compact_progress.py"
 
 # Retry tracking
 FAIL_COUNT=0
 LAST_FAILED_BEAD=""
 MAX_RETRIES=3
-
-# Compaction tracking
-ITERS_SINCE_COMPACTION=0
 
 # Initialize patterns file if it doesn't exist
 if [ ! -f "$PATTERNS_FILE" ]; then
@@ -98,14 +99,16 @@ finish() {
 
 # --- Confidence routing functions ---
 
-# Extract confidence level from agent output
+# Extract confidence level from agent output.
+# Patterns require the closing `>` so the placeholder string
+# `<confidence level="HIGH|MEDIUM|LOW">` from prompt.md does not match.
 parse_confidence() {
   local output="$1"
-  if echo "$output" | grep -q '<confidence level="HIGH"'; then
+  if echo "$output" | grep -q '<confidence level="HIGH">'; then
     echo "HIGH"
-  elif echo "$output" | grep -q '<confidence level="MEDIUM"'; then
+  elif echo "$output" | grep -q '<confidence level="MEDIUM">'; then
     echo "MEDIUM"
-  elif echo "$output" | grep -q '<confidence level="LOW"'; then
+  elif echo "$output" | grep -q '<confidence level="LOW">'; then
     echo "LOW"
   else
     echo ""
@@ -157,16 +160,9 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL)"
   echo "==============================================================="
 
-  # --- Progress compaction check ---
-  ITERS_SINCE_COMPACTION=$((ITERS_SINCE_COMPACTION + 1))
-  if python3 "$COMPACT_SCRIPT" --project-root "$PROJECT_ROOT" --iterations-since "$ITERS_SINCE_COMPACTION"; then
-    ITERS_SINCE_COMPACTION=0
-    echo "Progress compaction completed at iteration $i."
-  fi
-
   # --- Write retry state for the agent to read ---
   # Detect current in-progress bead (if any)
-  CURRENT_BEAD=$(bd list --status=in_progress 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+  CURRENT_BEAD=$(bd list --status=in_progress --json 2>/dev/null | jq -r '.[0].id // empty') || true
 
   # If we're tracking a failed bead and a different bead is now in progress, reset
   if [[ -n "$LAST_FAILED_BEAD" && -n "$CURRENT_BEAD" && "$CURRENT_BEAD" != "$LAST_FAILED_BEAD" ]]; then
@@ -187,7 +183,7 @@ RETRY_EOF
     BEAD_TITLE=$(bd show "$BEAD_ID" 2>/dev/null | sed -n '2p' | sed 's/^[^·]*· //' | sed 's/  *\[●.*//')
     echo "Resuming: $BEAD_ID — $BEAD_TITLE"
   else
-    BEAD_ID=$(bd ready 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+    BEAD_ID=$(bd ready --json 2>/dev/null | jq -r '.[0].id // empty') || true
     if [[ -n "$BEAD_ID" ]]; then
       BEAD_TITLE=$(bd show "$BEAD_ID" 2>/dev/null | sed -n '2p' | sed 's/^[^·]*· //' | sed 's/  *\[●.*//')
       echo "Current bead: $BEAD_ID — $BEAD_TITLE"
@@ -221,7 +217,7 @@ RETRY_EOF
   BEAD_DONE=false
 
   # Determine the current in-progress bead for signal handling
-  ACTIVE_BEAD=$(bd list --status=in_progress 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+  ACTIVE_BEAD=$(bd list --status=in_progress --json 2>/dev/null | jq -r '.[0].id // empty') || true
 
   if echo "$OUTPUT" | grep -q "<promise>BEAD_DONE</promise>"; then
     BEAD_DONE=true
@@ -261,7 +257,7 @@ RETRY_EOF
       bd update "$ACTIVE_BEAD" --status open 2>/dev/null || true
 
       # Find and re-open the prerequisite bead
-      PREREQ_BEAD=$(bd deps "$ACTIVE_BEAD" 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+      PREREQ_BEAD=$(bd dep list "$ACTIVE_BEAD" 2>/dev/null | grep -oE '[a-z][-a-z0-9]*-[a-z0-9]{2,}' | head -1) || true
       if [[ -n "$PREREQ_BEAD" ]]; then
         bd update "$PREREQ_BEAD" --status open 2>/dev/null || true
         echo "  Re-opened prerequisite $PREREQ_BEAD for rework."

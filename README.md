@@ -35,7 +35,7 @@ The initializer walks you through 5 phases. Each phase is an outcome contract �
 
 ### Key Properties
 
-- **Fresh context per task** — Each bead runs in a new agent session. No context rot across long projects — memory persists through git, the registers, `CLAUDE.md`, skills, and `scripts/ralph/archive.txt`, not conversation history.
+- **Fresh context per task** — Each bead runs in a new agent session. No context rot across long projects — memory persists through git (the registers, `CLAUDE.md`, `docs/skills/`, discovered patterns), not conversation history.
 - **Built-in quality loop** — Every feature goes through a quartet: implement → review → simplify → learn. Quality is structural, not optional.
 - **Self-improving codebase** — Compound beads feed discovered patterns back into project knowledge, tagged with the model that authored them so they can be retired or re-validated on model upgrade.
 - **Tunable autonomy** — Confidence routing lets you dial human oversight from full (`auto-land: none`) to zero (`auto-land: all`). The agent self-escalates when it's stuck.
@@ -85,9 +85,8 @@ scripts/
   ralph/
     ralph.sh                # The Ralph loop — runs agents one bead at a time
     prompt.md               # Per-iteration outcome contract for each agent session
-    archive.txt             # Append-only progress log written during each iteration
     patterns.md             # Codebase patterns discovered during implementation
-    compact_progress.py     # Periodic log compaction
+    archive.txt             # Per-run progress log appended by each iteration (gitignored)
   hooks/
     install.sh              # Pre-commit hook installer (9 hooks — see Configuration)
 docs/

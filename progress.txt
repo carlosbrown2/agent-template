@@ -1,7 +1,0 @@
-## Codebase Patterns
-
-<!-- Cross-session knowledge transfer. Updated in place, never compacted. -->
-
-# Ralph Progress Log
-Started: (fill in when implementation begins)
----
