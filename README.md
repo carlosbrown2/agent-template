@@ -130,6 +130,7 @@ A tenth hook, **dependency hallucination check**, ships commented out — uncomm
 - [Effective Harnesses for Long-Running Agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) by Anthropic Engineering — the initializer agent pattern and shift-handoff philosophy that inspired this project's name and structure
 - [The Ralph Loop](https://ghuntley.com/loop/) by Geoff Huntley — the original loop pattern Initializer is built around
 - [Compound Engineering](https://every.to/source-code/compound-engineering-the-definitive-guide) by Every — the guide to making every unit of AI-assisted work compound into the next
+- [Bitter Lesson Engineering](https://danielmiessler.com/blog/bitter-lesson-engineering) by Daniel Miessler — the "specify what, not how" framing that drove Initializer's outcome-contracts approach
 
 ## License
 
