@@ -28,10 +28,16 @@ teardown() {
   [ -n "$GATE_CMD" ]
 }
 
-@test "gate command does not end with '|| true' (would mask all failures)" {
-  # Trim trailing whitespace before the check.
+@test "gate command does not end with a soft-fail escape (|| true, || :, || 0, || exit 0)" {
+  # Trailing `|| <always-succeed>` binds to the whole && chain via left-to-right
+  # precedence, swallowing every prior clause's failure. The bug class is
+  # broader than the originally-named `|| true` form: `|| :`, `|| exit 0`, and
+  # other no-op trailers are functionally identical. Match all variants the
+  # failure-mode register names. (`|| 0` doesn't actually mask in bash today
+  # since `0` isn't a command, but it reads as soft-fail intent and is cheap
+  # to catch.)
   trimmed=$(echo "$GATE_CMD" | sed -e 's/[[:space:]]*$//')
-  [[ "$trimmed" != *"|| true" ]]
+  [[ ! "$trimmed" =~ \|\|[[:space:]]*(true|:|0|exit[[:space:]]+0)[[:space:]]*$ ]]
 }
 
 @test "gate command does not contain markdown files (bash -n on .md is meaningless)" {
