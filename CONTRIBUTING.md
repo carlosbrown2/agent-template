@@ -32,6 +32,25 @@ Thanks for your interest in improving Initializer. Contributions are welcome, wh
 
 ## Testing Changes
 
+### 1. Run the parser suite first
+
+`scripts/hooks/parsers.sh` holds the register-integrity parsers that the
+pre-commit hook sources. Any change to the parsers, the registers, or the
+install script must keep this suite green:
+
+```bash
+bats tests/hooks/
+```
+
+The suite exercises the failure-mode register parsers, the decision register
+parsers (including escaped pipes, Unicode, trailing whitespace, and
+multi-line continuation rows), and the CLAUDE.md model-tag validator against
+known-good and known-bad fixtures. Smoke tests at the end assert that the
+real registers in this repo pass. Run this before the end-to-end ralph test
+below so you don't chase a loop failure that is actually a parser regression.
+
+### 2. Run the ralph loop end-to-end
+
 Create a test bead and run the loop:
 
 ```bash

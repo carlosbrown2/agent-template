@@ -1,0 +1,390 @@
+#!/usr/bin/env bats
+# tests/hooks/parsers.bats — bats suite for scripts/hooks/parsers.sh
+#
+# Exercises every register-integrity parser against known-good and known-bad
+# fixtures, including edge cases (escaped pipes, Unicode, 5-column rows,
+# trailing whitespace, multi-line continuation rows). The parsers are the
+# mechanism every other register-integrity contract rests on, so drift in
+# them silently breaks the whole fail-closed chain.
+
+setup() {
+  PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+  # shellcheck source=/dev/null
+  source "$PROJECT_ROOT/scripts/hooks/parsers.sh"
+  TMPDIR_TEST="$(mktemp -d)"
+}
+
+teardown() {
+  rm -rf "$TMPDIR_TEST"
+}
+
+# --- fm_status_check -----------------------------------------------------
+
+@test "fm_status_check: accepts register with all valid statuses" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+# Failure-mode register
+| Module | Failure mode | Category | Check | Status |
+|--------|--------------|----------|-------|--------|
+| mod-a  | boom         | correctness | tests/a.py | covered |
+| mod-b  | crash        | correctness | n/a        | proven-impossible |
+| mod-c  | drift        | operational | n/a        | out-of-scope |
+EOF
+  run fm_status_check "$TMPDIR_TEST/fm.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "fm_status_check: rejects row with unknown status in last cell" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+|--------|--------------|----------|-------|--------|
+| mod-x  | boom         | correctness | tests/x.py | maybe-later |
+EOF
+  run fm_status_check "$TMPDIR_TEST/fm.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"maybe-later"* ]]
+}
+
+@test "fm_status_check: rejects multi-line continuation row (last cell empty)" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+|--------|--------------|----------|-------|--------|
+| mod-x  | boom         | correctness | tests/x.py | covered |
+|        |              | ...continuation... |          |         |
+EOF
+  run fm_status_check "$TMPDIR_TEST/fm.md"
+  [ "$status" -eq 1 ]
+}
+
+@test "fm_status_check: skips separator rows" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+|--------|--------------|----------|-------|--------|
+| :---: | :---: | :---: | :---: | :---: |
+| mod-a  | boom         | correctness | tests/a.py | covered |
+EOF
+  run fm_status_check "$TMPDIR_TEST/fm.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "fm_status_check: accepts trailing whitespace after status" {
+  # Use printf to emit trailing spaces exactly on the data row
+  printf '%s\n' \
+    '| Module | Failure mode | Category | Check | Status |' \
+    '|--------|--------------|----------|-------|--------|' \
+    '| mod-a  | boom         | correctness | tests/a.py | covered   |' \
+    > "$TMPDIR_TEST/fm.md"
+  run fm_status_check "$TMPDIR_TEST/fm.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "fm_status_check: accepts Unicode in cells" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+|--------|--------------|----------|-------|--------|
+| módulo | falha — ☃   | correctness | tests/a.py | covered |
+EOF
+  run fm_status_check "$TMPDIR_TEST/fm.md"
+  [ "$status" -eq 0 ]
+}
+
+# --- fm_file_refs_check --------------------------------------------------
+
+@test "fm_file_refs_check: accepts register whose refs exist on disk" {
+  mkdir -p "$TMPDIR_TEST/tests"
+  touch "$TMPDIR_TEST/tests/a.py"
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | boom         | correctness | tests/a.py | covered |
+EOF
+  run fm_file_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST" ""
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "fm_file_refs_check: rejects register whose refs do not exist" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | boom         | correctness | tests/missing.py | covered |
+EOF
+  run fm_file_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST" ""
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"tests/missing.py"* ]]
+}
+
+@test "fm_file_refs_check: accepts missing ref if staged for addition" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | boom         | correctness | tests/new.py | covered |
+EOF
+  run fm_file_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST" $'tests/new.py'
+  [ "$status" -eq 0 ]
+}
+
+@test "fm_file_refs_check: strips pytest-style ::test_name suffix when checking file existence" {
+  mkdir -p "$TMPDIR_TEST/tests"
+  touch "$TMPDIR_TEST/tests/a.py"
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | boom         | correctness | tests/a.py::test_boom | covered |
+EOF
+  run fm_file_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST" ""
+  [ "$status" -eq 0 ]
+}
+
+# --- dec_required_rows_check ---------------------------------------------
+
+@test "dec_required_rows_check: accepts register with all baseline decisions" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+| Solution selection | x | y | z | bounded |
+| Acceptance interpretation | x | y | z | ritual-bounded |
+| Sampling variance | x | y | z | bounded |
+| Verification truth | x | y | z | bounded |
+| Scope creep | x | y | z | bounded |
+EOF
+  run dec_required_rows_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "dec_required_rows_check: rejects register missing a baseline decision" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Solution selection | x | y | z | bounded |
+| Acceptance interpretation | x | y | z | ritual-bounded |
+| Sampling variance | x | y | z | bounded |
+| Scope creep | x | y | z | bounded |
+EOF
+  run dec_required_rows_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Verification truth"* ]]
+}
+
+# --- dec_row_structure_check ---------------------------------------------
+
+@test "dec_row_structure_check: accepts row with >=5 columns and bounded status" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+|----------------|-------|----------|-------------|--------|
+| Foo | x | y | z | bounded |
+EOF
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "dec_row_structure_check: rejects row with fewer than 5 columns" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Status |
+|----------------|-------|----------|--------|
+| Foo | x | y | bounded |
+EOF
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"too few columns"* ]]
+}
+
+@test "dec_row_structure_check: rejects row with bad status" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+|----------------|-------|----------|-------------|--------|
+| Foo | x | y | z | maybe |
+EOF
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bad status"* ]]
+}
+
+@test "dec_row_structure_check: accepts all four valid statuses" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+|----------------|-------|----------|-------------|--------|
+| A | x | y | z | bounded |
+| B | x | y | z | ritual-bounded |
+| C | x | y | z | agent-discretion |
+| D | x | y | z | escalation-only |
+EOF
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "dec_row_structure_check: rejects multi-line continuation row (empty last cell)" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+|----------------|-------|----------|-------------|--------|
+| Foo | x | y | z | bounded |
+|     |   | ...continuation text... | | |
+EOF
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 1 ]
+}
+
+@test "dec_row_structure_check: accepts row with escaped pipes inside a cell" {
+  # The cell "a \| b" should NOT increase the effective pipe count; the row
+  # still has 5 real columns so it must pass.
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+|----------------|-------|----------|-------------|--------|
+| Foo | a \| b | y | z | bounded |
+EOF
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "dec_row_structure_check: accepts Unicode in cells" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+|----------------|-------|----------|-------------|--------|
+| Föo — ☃ | x | y | z | bounded |
+EOF
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "dec_row_structure_check: accepts trailing whitespace around status" {
+  printf '%s\n' \
+    '| Decision point | Where | Bounding | Enforcement | Status |' \
+    '|----------------|-------|----------|-------------|--------|' \
+    '| Foo | x | y | z |    bounded    |' \
+    > "$TMPDIR_TEST/dec.md"
+  run dec_row_structure_check "$TMPDIR_TEST/dec.md"
+  [ "$status" -eq 0 ]
+}
+
+# --- dec_file_refs_check -------------------------------------------------
+
+@test "dec_file_refs_check: accepts register whose refs exist" {
+  mkdir -p "$TMPDIR_TEST/scripts"
+  touch "$TMPDIR_TEST/scripts/h.sh"
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+| Foo | x | scripts/h.sh | z | bounded |
+EOF
+  run dec_file_refs_check "$TMPDIR_TEST/dec.md" "$TMPDIR_TEST" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "dec_file_refs_check: rejects register with missing ref" {
+  cat > "$TMPDIR_TEST/dec.md" <<'EOF'
+| Decision point | Where | Bounding | Enforcement | Status |
+| Foo | x | scripts/missing.sh | z | bounded |
+EOF
+  run dec_file_refs_check "$TMPDIR_TEST/dec.md" "$TMPDIR_TEST" ""
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"scripts/missing.sh"* ]]
+}
+
+# --- claude_model_tags_check ---------------------------------------------
+
+@test "claude_model_tags_check: accepts entry with model: tag" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Discovered Patterns
+
+### Use anyio for async I/O
+model: claude-opus-4-6
+why: structured concurrency
+EOF
+  run claude_model_tags_check "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "claude_model_tags_check: rejects entry without model: tag" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Discovered Patterns
+
+### Use anyio for async I/O
+why: structured concurrency
+EOF
+  run claude_model_tags_check "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Use anyio for async I/O"* ]]
+}
+
+@test "claude_model_tags_check: ignores entries outside ## Discovered Patterns section" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Architecture
+
+### Some component
+(intentionally no model tag — outside the section)
+
+## Discovered Patterns
+
+### Tagged pattern
+model: claude-opus-4-6
+EOF
+  run claude_model_tags_check "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "claude_model_tags_check: does not count prose 'the model' as a tag" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Discovered Patterns
+
+### Untagged pattern
+prose that mentions the model but does not tag it.
+EOF
+  run claude_model_tags_check "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Untagged pattern"* ]]
+}
+
+@test "claude_model_tags_check: detects untagged entry at end of section (no trailing heading)" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Discovered Patterns
+
+### Dangling untagged pattern
+no model tag, no trailing heading
+EOF
+  run claude_model_tags_check "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Dangling untagged pattern"* ]]
+}
+
+@test "claude_model_tags_check: closes section on next ## heading" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Discovered Patterns
+
+### Tagged
+model: claude-opus-4-6
+
+## After Patterns
+
+### Not a pattern
+no tag here, but outside section — should be ignored
+EOF
+  run claude_model_tags_check "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+}
+
+# --- Smoke tests against the real project registers ---------------------
+# These catch drift: if the real registers in this repo ever diverge from
+# what the parsers accept, the CI gate fails loudly.
+
+@test "smoke: real docs/failure-modes.md passes fm_status_check" {
+  run fm_status_check "$PROJECT_ROOT/docs/failure-modes.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "smoke: real docs/failure-modes.md passes fm_file_refs_check" {
+  run fm_file_refs_check "$PROJECT_ROOT/docs/failure-modes.md" "$PROJECT_ROOT" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "smoke: real docs/decision-register.md passes dec_required_rows_check" {
+  run dec_required_rows_check "$PROJECT_ROOT/docs/decision-register.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "smoke: real docs/decision-register.md passes dec_row_structure_check" {
+  run dec_row_structure_check "$PROJECT_ROOT/docs/decision-register.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "smoke: real docs/decision-register.md passes dec_file_refs_check" {
+  run dec_file_refs_check "$PROJECT_ROOT/docs/decision-register.md" "$PROJECT_ROOT" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "smoke: real CLAUDE.md passes claude_model_tags_check" {
+  run claude_model_tags_check "$PROJECT_ROOT/CLAUDE.md"
+  [ "$status" -eq 0 ]
+}

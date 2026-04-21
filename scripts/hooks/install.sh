@@ -60,6 +60,19 @@ PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 CLAUDE_MD="$PROJECT_ROOT/CLAUDE.md"
 CLAUDE_MD_MAX_LINES=200
 
+# Register-integrity parsers live in scripts/hooks/parsers.sh so they can be
+# exercised by tests/hooks/parsers.bats outside a live pre-commit context.
+# Drift between the generated hook and the parsers is prevented by sourcing.
+PARSERS_LIB="$PROJECT_ROOT/scripts/hooks/parsers.sh"
+if [ ! -f "$PARSERS_LIB" ]; then
+  echo "BLOCKED: scripts/hooks/parsers.sh not found at $PARSERS_LIB."
+  echo "  The pre-commit hook depends on this file for register parsers."
+  echo "  Run ./scripts/hooks/install.sh from the project root to (re)install."
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$PARSERS_LIB"
+
 # --- CLAUDE.md size guard ---
 if git diff --cached --name-only | grep -q "^CLAUDE.md$"; then
   line_count=$(git show :CLAUDE.md 2>/dev/null | wc -l | tr -d ' ')
@@ -257,38 +270,10 @@ if [ -f "$SCOPE_FILE" ]; then
   fi
 fi
 
-# --- Failure-mode register integrity ---
-# Every data row in docs/failure-modes.md must end with an acceptable Status
-# (covered | proven-impossible | out-of-scope) in its last cell. Every check
-# file it references must exist on disk (or be staged for addition).
-#
-# Note on table format: each row must be on a single line. Multi-line visual
-# continuation rows ("| | | continuation text | | |") are flagged because
-# their last cell is empty and they have no Status.
+# --- Failure-mode register integrity (parsers in scripts/hooks/parsers.sh) ---
 FM_REGISTER="$PROJECT_ROOT/docs/failure-modes.md"
 if [ -f "$FM_REGISTER" ]; then
-  bad_rows=$(awk '
-    /^\|/ {
-      line = $0
-      # Skip separator rows: contain only |, -, :, space
-      stripped = line
-      gsub(/[|:\- \t]/, "", stripped)
-      if (stripped == "") next
-      # Skip header rows (contain the column-name "Failure mode" or "Status")
-      if (line ~ /Failure mode/ || line ~ /Status[ \t]*\|/) next
-
-      # Parse the last real cell. A markdown table row |c1|c2|...|cN| splits as
-      # ["", "c1", "c2", ..., "cN", ""], so the last real cell is at index n-1.
-      n = split(line, cells, "|")
-      last_cell = cells[n-1]
-      sub(/^[ \t]+/, "", last_cell)
-      sub(/[ \t]+$/, "", last_cell)
-      if (last_cell != "covered" && last_cell != "proven-impossible" && last_cell != "out-of-scope") {
-        print NR ": " line
-      }
-    }
-  ' "$FM_REGISTER")
-  if [ -n "$bad_rows" ]; then
+  if ! bad_rows=$(fm_status_check "$FM_REGISTER"); then
     echo "BLOCKED: docs/failure-modes.md has rows without an acceptable Status in the last cell."
     echo ""
     echo "  Every data row must end in one of:"
@@ -306,23 +291,8 @@ if [ -f "$FM_REGISTER" ]; then
     exit 1
   fi
 
-  # Every test/proof file referenced in the register must exist on disk.
-  # Extract path-like tokens under common project subdirectories.
-  missing_refs=""
-  while IFS= read -r ref; do
-    [ -z "$ref" ] && continue
-    # Strip any ::test_name suffix (pytest-style references)
-    file_part="${ref%%::*}"
-    if [ ! -f "$PROJECT_ROOT/$file_part" ]; then
-      # Check if it's staged for addition
-      if ! git diff --cached --name-only | grep -qx "$file_part"; then
-        missing_refs="${missing_refs}
-    ${ref}"
-      fi
-    fi
-  done < <(grep -oE '(tests?|proofs|src|spec|docs|tasks|scripts|lib|pkg)/[a-zA-Z0-9_/.-]+\.[a-zA-Z0-9]+(::[a-zA-Z0-9_]+)?' "$FM_REGISTER" | sort -u)
-
-  if [ -n "$missing_refs" ]; then
+  STAGED_FILES=$(git diff --cached --name-only)
+  if ! missing_refs=$(fm_file_refs_check "$FM_REGISTER" "$PROJECT_ROOT" "$STAGED_FILES"); then
     echo "BLOCKED: docs/failure-modes.md references files that do not exist:"
     printf '%s\n' "$missing_refs"
     echo ""
@@ -332,32 +302,10 @@ if [ -f "$FM_REGISTER" ]; then
   fi
 fi
 
-# --- Decision register integrity ---
-# docs/decision-register.md enumerates every decision point where agent variance
-# can enter the project, paired with the structural mechanism that bounds it.
-# This hook validates the register's structure: required baseline rows present,
-# every row is single-line with >= 5 columns, every row's last cell holds an
-# acceptable Status. Bounding-mechanism file references must exist on disk.
+# --- Decision register integrity (parsers in scripts/hooks/parsers.sh) ---
 DEC_REGISTER="$PROJECT_ROOT/docs/decision-register.md"
 if [ -f "$DEC_REGISTER" ]; then
-  # Required baseline decision points — every project must have these rows.
-  REQUIRED_DECISIONS=(
-    "Solution selection"
-    "Acceptance interpretation"
-    "Sampling variance"
-    "Verification truth"
-    "Scope creep"
-  )
-
-  missing=""
-  for d in "${REQUIRED_DECISIONS[@]}"; do
-    if ! grep -qF "$d" "$DEC_REGISTER"; then
-      missing="${missing}
-    ${d}"
-    fi
-  done
-
-  if [ -n "$missing" ]; then
+  if ! missing=$(dec_required_rows_check "$DEC_REGISTER"); then
     echo "BLOCKED: docs/decision-register.md missing required baseline decision points:"
     printf '%s\n' "$missing"
     echo ""
@@ -366,38 +314,7 @@ if [ -f "$DEC_REGISTER" ]; then
     exit 1
   fi
 
-  # Validate row structure: every data row must have >= 5 cells (>= 6 pipes,
-  # ignoring escaped \| inside cells) AND its last cell must hold a valid Status.
-  # Multi-line continuation rows are not supported — each row must be a single line.
-  bad_rows=$(awk '
-    /^\|/ {
-      line = $0
-      stripped = line
-      gsub(/[|:\- \t]/, "", stripped)
-      if (stripped == "") next  # separator row
-      if (line ~ /Decision point/) next  # header row
-
-      # Count real (unescaped) pipes by stripping \| first
-      count_line = line
-      gsub(/\\\|/, "", count_line)
-      n_pipes = gsub(/\|/, "|", count_line)
-      if (n_pipes < 6) {
-        print NR ": (too few columns) " $0
-        next
-      }
-
-      # Parse the last real cell as the Status column
-      n = split(line, cells, "|")
-      last_cell = cells[n-1]
-      sub(/^[ \t]+/, "", last_cell)
-      sub(/[ \t]+$/, "", last_cell)
-      if (last_cell != "bounded" && last_cell != "ritual-bounded" && last_cell != "agent-discretion" && last_cell != "escalation-only") {
-        print NR ": (bad status) " $0
-      }
-    }
-  ' "$DEC_REGISTER")
-
-  if [ -n "$bad_rows" ]; then
+  if ! bad_rows=$(dec_row_structure_check "$DEC_REGISTER"); then
     echo "BLOCKED: docs/decision-register.md has malformed rows."
     echo ""
     echo "  Every data row must be a single line with at least 5 columns whose last"
@@ -414,21 +331,8 @@ if [ -f "$DEC_REGISTER" ]; then
     exit 1
   fi
 
-  # Bounding-mechanism file references must exist on disk.
-  # Extract path-like tokens from the register and check each one.
-  missing_dec_refs=""
-  while IFS= read -r ref; do
-    [ -z "$ref" ] && continue
-    if [ ! -f "$PROJECT_ROOT/$ref" ]; then
-      # Allow the reference if the file is staged for addition in this commit
-      if ! git diff --cached --name-only | grep -qx "$ref"; then
-        missing_dec_refs="${missing_dec_refs}
-    ${ref}"
-      fi
-    fi
-  done < <(grep -oE '(tests?|proofs|src|spec|docs|tasks|scripts|lib|pkg)/[a-zA-Z0-9_/.-]+\.[a-zA-Z0-9]+' "$DEC_REGISTER" | sort -u)
-
-  if [ -n "$missing_dec_refs" ]; then
+  STAGED_FILES="${STAGED_FILES:-$(git diff --cached --name-only)}"
+  if ! missing_dec_refs=$(dec_file_refs_check "$DEC_REGISTER" "$PROJECT_ROOT" "$STAGED_FILES"); then
     echo "BLOCKED: docs/decision-register.md references files that do not exist:"
     printf '%s\n' "$missing_dec_refs"
     echo ""
@@ -469,48 +373,9 @@ if [ "$BEAD_TYPE" = "review" ]; then
   done
 fi
 
-# --- CLAUDE.md model-tag validator ---
-# Every entry under ## Discovered Patterns in CLAUDE.md must contain a `model:` tag
-# so it can be retired or re-validated on model upgrade. Pattern entries MUST be
-# delimited by `### ` headings within the section — that's the contract; bullet-list
-# or bold-only patterns are not detected and should not be used.
+# --- CLAUDE.md model-tag validator (parser in scripts/hooks/parsers.sh) ---
 if git diff --cached --name-only | grep -qx 'CLAUDE.md'; then
-  bad_patterns=$(awk '
-    BEGIN { in_section = 0; current_entry = ""; current_line = 0; has_model = 0 }
-    /^## Discovered Patterns/ {
-      in_section = 1
-      current_entry = ""
-      has_model = 0
-      next
-    }
-    in_section && /^## / {
-      if (current_entry != "" && !has_model) {
-        print current_line ": " current_entry
-      }
-      in_section = 0
-      next
-    }
-    in_section && /^### / {
-      if (current_entry != "" && !has_model) {
-        print current_line ": " current_entry
-      }
-      current_entry = $0
-      current_line = NR
-      has_model = 0
-      next
-    }
-    # Anchored: a real tag is "model:" at the start of a line (with optional
-    # leading whitespace), followed by whitespace. Prose mentions of "the model"
-    # do not match.
-    in_section && /^[[:space:]]*model:[[:space:]]/ { has_model = 1 }
-    END {
-      if (in_section && current_entry != "" && !has_model) {
-        print current_line ": " current_entry
-      }
-    }
-  ' "$PROJECT_ROOT/CLAUDE.md")
-
-  if [ -n "$bad_patterns" ]; then
+  if ! bad_patterns=$(claude_model_tags_check "$PROJECT_ROOT/CLAUDE.md"); then
     echo "BLOCKED: CLAUDE.md ## Discovered Patterns has entries without a model: tag."
     echo ""
     echo "  Every pattern under ## Discovered Patterns must carry a model: tag identifying"
