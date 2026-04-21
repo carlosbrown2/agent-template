@@ -1,4 +1,4 @@
-# Review Severity Rubric
+# Initializer Template Review Severity Rubric
 
 ## When to load
 
@@ -6,7 +6,7 @@ Load this skill at the start of every **review** bead. Every finding in a review
 
 This rubric exists to **bound the "review verdict" decision point** in `docs/decision-register.md`. Without it, severity classification is the model's intuition — and two runs of the same review can produce different P1 sets. With it, severity is anchored to a checked-in standard, and the review's variance is funneled into the rubric's clauses.
 
-This file is a starter rubric. Projects should refine the clauses in Phase 1 to match their domain (security-critical projects may add new categories; data-science projects may emphasize statistical correctness, etc.). Whatever clauses you add, the contract is that **every finding in every review cites a specific clause by name**.
+The Initializer Template uses this rubric for its own review beads, with one project-specific clause added (`P1.hook-bypass`) reflecting CLAUDE.md's "no hook is ever bypassed" invariant. Projects bootstrapped from this template should rename the header to a project-named one and add their own domain-specific clauses (security-critical projects may add new categories; data-science projects may emphasize statistical correctness, etc.). Whatever clauses you add, the contract is that **every finding in every review cites a specific clause by name**. The pre-commit rubric-edit guard rejects commits while the rubric still carries its original "starter" disclaimer.
 
 ---
 
@@ -26,6 +26,7 @@ A finding is P1 if **any** of the following clauses applies:
 - **P1.gate-bypass** — The verification gate was reported as green but the code path the bead introduced isn't actually exercised by the gate. The "done" claim isn't backed by the gate.
 - **P1.test-tautology** — A test asserts something that is always true (e.g., `assert result == result`, `assert isinstance(x, type(x))`) or asserts on the mock instead of the system under test.
 - **P1.flaky-test** — A test passes or fails depending on system state, run order, wall clock, or random sampling. Flaky tests destroy the verification gate's truth value, which is the foundation of every other contract.
+- **P1.hook-bypass** — Code, scripts, docs, or workflows use `--no-verify`, edit `.git/hooks/` directly, or otherwise circumvent an installed hook (project-specific clause for the Initializer Template). CLAUDE.md's invariant: no hook is ever bypassed; if a hook is wrong, fix the hook in a separate bead. Includes hook generators that silently skip checks under conditions not declared in their contract.
 
 ### P2 — Should fix soon (file as a new bead)
 

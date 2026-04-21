@@ -8,7 +8,7 @@ Every place agent variance can enter this project must appear here, paired with 
 |----------------|-----------------|--------------------|-------------|--------|
 | Solution selection | impl bead execution | every acceptance criterion bound to a mechanical check | failure-mode register hook in scripts/hooks/install.sh | bounded |
 | Acceptance interpretation | every "is it done" call | every PRD criterion expressible as test/type/proof | PRD review at Phase 1; re-validate on PRD edit | ritual-bounded |
-| Review verdict | review beads | severity rubric in docs/skills/review-rubric.md; each finding cites a clause | review artifact validator hook; rubric-edit hook (pending) | ritual-bounded |
+| Review verdict | review beads | severity rubric in docs/skills/review-rubric.md (no longer the unedited starter); each finding cites a clause | review artifact validator hook + rubric-edit guard hook in scripts/hooks/install.sh | bounded |
 | Pattern extraction | compound beads | every promoted pattern carries a `model:` tag and a retire-on-upgrade rule | CLAUDE.md model-tag validator hook | bounded |
 | Decomposition | Phase 2 | bead schema: scope, deps, criteria, size, register DoD | beads CLI + human dep-graph review at Phase 2 | ritual-bounded |
 | Tool / search choice | execution | unconstrained — model picks | none (rationale: search strategy is exactly where we want model freedom) | agent-discretion |
@@ -22,6 +22,4 @@ Every place agent variance can enter this project must appear here, paired with 
 
 ## Pending promotions
 
-One row remains `ritual-bounded` pending an audit bead that will promote it to `bounded`:
-
-- **Review verdict** → `bounded` when `agent-template-kjy` lands the pre-commit hook that rejects the unedited `docs/skills/review-rubric.md` starter.
+No rows are currently pending promotion. Add new entries here when a `ritual-bounded` row has a clear path to `bounded` via a future audit bead.

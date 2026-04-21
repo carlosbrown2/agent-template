@@ -10,23 +10,26 @@
 #   3. Bead type fail-closed gate — when a bead is in_progress, .current-bead-type
 #      must exist and hold one of impl|review|pare|compound|research. Closes the
 #      "forget the marker → no enforcement" bypass for the hooks below.
-#   4. Review/research bead write-protection — when .current-bead-type is review or
+#   4. Rubric-edit guard — when a bead is in_progress, docs/skills/review-rubric.md
+#      must not still contain the "starter rubric" disclaimer. Phase 1 bootstrap
+#      (no in-progress bead) is exempt. Bounds the "Review verdict" decision point.
+#   5. Review/research bead write-protection — when .current-bead-type is review or
 #      research, only files under docs/reviews/ may change.
-#   5. Scope enforcement — rejects commits touching files outside the current bead's
+#   6. Scope enforcement — rejects commits touching files outside the current bead's
 #      declared scope (.current-bead-scope). Always-allowed infrastructure paths are
 #      exempt. impl/pare/compound beads MUST have a scope file or the hook blocks.
-#   6. Failure-mode register integrity — every row in docs/failure-modes.md must have an
+#   7. Failure-mode register integrity — every row in docs/failure-modes.md must have an
 #      acceptable Status (covered | proven-impossible | out-of-scope), and every check
 #      file it references must exist on disk.
-#   7. Decision register integrity — docs/decision-register.md must contain the baseline
+#   8. Decision register integrity — docs/decision-register.md must contain the baseline
 #      decision points (Solution selection, Acceptance interpretation, Sampling variance,
 #      Verification truth, Scope creep), every row must have ≥5 columns and an acceptable
 #      Status (bounded | ritual-bounded | agent-discretion | escalation-only), and every
 #      bounding-mechanism file path it references must exist on disk.
-#   8. Review artifact validator — when .current-bead-type=review, files staged in
+#   9. Review artifact validator — when .current-bead-type=review, files staged in
 #      docs/reviews/ must cite docs/skills/review-rubric.md AND contain at least one
 #      severity clause citation (P1.foo, P2.foo, P3.foo).
-#   9. CLAUDE.md model-tag validator — every entry under ## Discovered Patterns in
+#  10. CLAUDE.md model-tag validator — every entry under ## Discovered Patterns in
 #      CLAUDE.md must carry a `model:` tag identifying its source model.
 #
 # Also installed:
@@ -147,6 +150,34 @@ if [ -n "$IN_PROGRESS_BEAD" ]; then
       exit 1
       ;;
   esac
+fi
+
+# --- Rubric-edit guard (Phase 1 completion check) ---
+# The shipped docs/skills/review-rubric.md carries a "starter rubric" disclaimer.
+# Phase 1 contract (project-kickoff-prompt.md): the disclaimer must be replaced with
+# a project-named header and at least one project-specific clause must be added.
+# Without this, "Review verdict" in the decision register cannot legitimately be
+# claimed `bounded` — the rubric is not actually project-specific. Phase 1 bootstrap
+# (no in-progress bead) is exempt so the very first commits can land.
+RUBRIC_FILE="$PROJECT_ROOT/docs/skills/review-rubric.md"
+if [ -n "$IN_PROGRESS_BEAD" ] && [ -f "$RUBRIC_FILE" ]; then
+  if grep -qF "This file is a starter rubric" "$RUBRIC_FILE"; then
+    echo "BLOCKED: docs/skills/review-rubric.md still contains the starter disclaimer."
+    echo ""
+    echo "  Phase 1 contract (project-kickoff-prompt.md): replace the 'starter rubric'"
+    echo "  disclaimer with a project-named header and add at least one project-specific"
+    echo "  clause. Without this, 'Review verdict' in docs/decision-register.md cannot"
+    echo "  legitimately be claimed bounded — the rubric is not actually project-specific."
+    echo ""
+    echo "  How to fix:"
+    echo "    1. Replace the '# Review Severity Rubric' header with a project-named one"
+    echo "       (e.g., '# <Project> Review Severity Rubric')."
+    echo "    2. Delete or rephrase the 'This file is a starter rubric' paragraph."
+    echo "    3. Add at least one project-specific clause under P1, P2, or P3."
+    echo ""
+    echo "  Phase 1 bootstrap (before any bead is in_progress) is exempt."
+    exit 1
+  fi
 fi
 
 # --- Review/research bead write protection ---
@@ -515,6 +546,7 @@ chmod +x "$GIT_HOOKS_DIR/pre-push"
 
 echo "Hooks installed successfully."
 echo "  - Pre-commit: Bead type fail-closed gate (active — requires .current-bead-type when a bead is in_progress)"
+echo "  - Pre-commit: Rubric-edit guard (active — rejects the unedited 'starter rubric' once any bead is in_progress)"
 echo "  - Pre-commit: Scope enforcement (active — requires .current-bead-scope for impl/pare/compound beads)"
 echo "  - Pre-commit: Failure-mode register integrity (active — fires only if docs/failure-modes.md exists)"
 echo "  - Pre-commit: Decision register integrity + bounding-mechanism file refs (active — fires only if docs/decision-register.md exists)"
