@@ -147,6 +147,92 @@ dec_file_refs_check() {
   return 0
 }
 
+# Starter rubric constants — used by rubric_edit_check.
+# These are the universal starter values that ship in docs/skills/review-rubric.md
+# before any project customizes it. The Phase 1 contract is that a project
+# (a) replaces the disclaimer, (b) renames the H1 header from the starter, and
+# (c) adds at least one clause not in the starter allowlist. The Initializer
+# Template's own customization is `P1.hook-bypass` plus the project-named header.
+RUBRIC_STARTER_DISCLAIMER="This file is a starter rubric"
+RUBRIC_STARTER_HEADER="# Review Severity Rubric"
+RUBRIC_STARTER_CLAUSES=(
+  "P1.correctness"
+  "P1.contract-violation"
+  "P1.register-gap"
+  "P1.decision-gap"
+  "P1.security"
+  "P1.data-loss"
+  "P1.scope-violation"
+  "P1.gate-bypass"
+  "P1.test-tautology"
+  "P1.flaky-test"
+  "P2.weak-test"
+  "P2.duplicated-logic"
+  "P2.poor-naming"
+  "P2.over-abstraction"
+  "P2.under-abstraction"
+  "P2.missing-error-handling"
+  "P2.dependency-bloat"
+  "P3.style"
+  "P3.docstring-drift"
+  "P3.minor-simplification"
+  "P3.test-clarity"
+)
+
+# rubric_edit_check <rubric-path>
+# Returns 0 when the rubric has been customized beyond the shipped starter:
+#   - the starter disclaimer phrase is gone,
+#   - the first H1 header differs from RUBRIC_STARTER_HEADER verbatim, and
+#   - at least one clause exists, with at least one not in RUBRIC_STARTER_CLAUSES.
+# Returns 1 otherwise, printing the specific failing reason to stdout. A missing
+# rubric file returns 0 (the install.sh guard already conditions on existence).
+rubric_edit_check() {
+  local rubric="$1"
+  [ -f "$rubric" ] || return 0
+
+  if grep -qF "$RUBRIC_STARTER_DISCLAIMER" "$rubric"; then
+    echo "starter disclaimer phrase still present (\"$RUBRIC_STARTER_DISCLAIMER\")"
+    return 1
+  fi
+
+  local header
+  header=$(grep -m1 '^# ' "$rubric" | sed -e 's/[[:space:]]*$//')
+  if [ "$header" = "$RUBRIC_STARTER_HEADER" ]; then
+    echo "H1 header is the starter header verbatim (\"$RUBRIC_STARTER_HEADER\")"
+    return 1
+  fi
+
+  local clauses
+  clauses=$(grep -oE 'P[123]\.[a-z][a-z-]*' "$rubric" 2>/dev/null | sort -u)
+  if [ -z "$clauses" ]; then
+    echo "no clauses defined (file contains no P1.x / P2.x / P3.x identifiers)"
+    return 1
+  fi
+
+  local clause starter found_custom=0
+  while IFS= read -r clause; do
+    [ -z "$clause" ] && continue
+    local in_starter=0
+    for starter in "${RUBRIC_STARTER_CLAUSES[@]}"; do
+      if [ "$clause" = "$starter" ]; then
+        in_starter=1
+        break
+      fi
+    done
+    if [ "$in_starter" = "0" ]; then
+      found_custom=1
+      break
+    fi
+  done <<< "$clauses"
+
+  if [ "$found_custom" = "0" ]; then
+    echo "no project-specific clauses (every clause is in the starter allowlist)"
+    return 1
+  fi
+
+  return 0
+}
+
 # claude_model_tags_check <claude-md-path>
 claude_model_tags_check() {
   local claude_md="$1"

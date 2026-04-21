@@ -355,6 +355,71 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+# --- rubric_edit_check ---------------------------------------------------
+
+@test "rubric_edit_check: rejects rubric still containing the starter disclaimer phrase" {
+  cat > "$TMPDIR_TEST/rubric.md" <<'EOF'
+# My Project Review Severity Rubric
+
+This file is a starter rubric for projects bootstrapped from Initializer.
+
+- **P1.correctness** — wrong result
+- **P1.my-project-special** — domain-specific
+EOF
+  run rubric_edit_check "$TMPDIR_TEST/rubric.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"disclaimer"* ]]
+}
+
+@test "rubric_edit_check: rejects stub rubric with no clauses" {
+  cat > "$TMPDIR_TEST/rubric.md" <<'EOF'
+# My Project Review Severity Rubric
+
+Header only, body intentionally blank — no clauses defined.
+EOF
+  run rubric_edit_check "$TMPDIR_TEST/rubric.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no clauses"* ]]
+}
+
+@test "rubric_edit_check: rejects rubric that copies starter clauses verbatim with no additions" {
+  cat > "$TMPDIR_TEST/rubric.md" <<'EOF'
+# My Project Review Severity Rubric
+
+- **P1.correctness** — wrong result for spec-covered input
+- **P1.contract-violation** — violates a checked-in precondition
+- **P2.weak-test** — passes against the bug
+- **P3.style** — convention nit
+EOF
+  run rubric_edit_check "$TMPDIR_TEST/rubric.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no project-specific clauses"* ]]
+}
+
+@test "rubric_edit_check: rejects rubric with the starter H1 header verbatim" {
+  cat > "$TMPDIR_TEST/rubric.md" <<'EOF'
+# Review Severity Rubric
+
+- **P1.correctness** — wrong result
+- **P1.my-project-special** — domain-specific
+EOF
+  run rubric_edit_check "$TMPDIR_TEST/rubric.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"starter header"* ]]
+}
+
+@test "rubric_edit_check: accepts rubric with a project-named header and a non-starter clause" {
+  cat > "$TMPDIR_TEST/rubric.md" <<'EOF'
+# My Project Review Severity Rubric
+
+- **P1.correctness** — wrong result
+- **P1.my-project-special** — domain-specific clause not in the starter set
+EOF
+  run rubric_edit_check "$TMPDIR_TEST/rubric.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 # --- Smoke tests against the real project registers ---------------------
 # These catch drift: if the real registers in this repo ever diverge from
 # what the parsers accept, the CI gate fails loudly.
@@ -386,5 +451,10 @@ EOF
 
 @test "smoke: real CLAUDE.md passes claude_model_tags_check" {
   run claude_model_tags_check "$PROJECT_ROOT/CLAUDE.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "smoke: real docs/skills/review-rubric.md passes rubric_edit_check" {
+  run rubric_edit_check "$PROJECT_ROOT/docs/skills/review-rubric.md"
   [ "$status" -eq 0 ]
 }

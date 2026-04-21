@@ -153,16 +153,21 @@ if [ -n "$IN_PROGRESS_BEAD" ]; then
 fi
 
 # --- Rubric-edit guard (Phase 1 completion check) ---
-# The shipped docs/skills/review-rubric.md carries a "starter rubric" disclaimer.
-# Phase 1 contract (project-kickoff-prompt.md): the disclaimer must be replaced with
-# a project-named header and at least one project-specific clause must be added.
-# Without this, "Review verdict" in the decision register cannot legitimately be
-# claimed `bounded` — the rubric is not actually project-specific. Phase 1 bootstrap
-# (no in-progress bead) is exempt so the very first commits can land.
+# The shipped docs/skills/review-rubric.md carries a "starter rubric" disclaimer,
+# a generic header, and a fixed set of starter clauses. Phase 1 contract
+# (project-kickoff-prompt.md): the disclaimer must be replaced, the header must
+# be renamed, and at least one project-specific clause must be added. Without
+# this, "Review verdict" in the decision register cannot legitimately be claimed
+# `bounded` — the rubric is not actually project-specific. The check itself
+# lives in scripts/hooks/parsers.sh as rubric_edit_check so the bats suite
+# under tests/hooks/ exercises it directly. Phase 1 bootstrap (no in-progress
+# bead) is exempt so the very first commits can land.
 RUBRIC_FILE="$PROJECT_ROOT/docs/skills/review-rubric.md"
 if [ -n "$IN_PROGRESS_BEAD" ] && [ -f "$RUBRIC_FILE" ]; then
-  if grep -qF "This file is a starter rubric" "$RUBRIC_FILE"; then
-    echo "BLOCKED: docs/skills/review-rubric.md still contains the starter disclaimer."
+  if ! reason=$(rubric_edit_check "$RUBRIC_FILE"); then
+    echo "BLOCKED: docs/skills/review-rubric.md is still the unedited starter."
+    echo ""
+    echo "  Reason: $reason"
     echo ""
     echo "  Phase 1 contract (project-kickoff-prompt.md): replace the 'starter rubric'"
     echo "  disclaimer with a project-named header and add at least one project-specific"
@@ -173,7 +178,9 @@ if [ -n "$IN_PROGRESS_BEAD" ] && [ -f "$RUBRIC_FILE" ]; then
     echo "    1. Replace the '# Review Severity Rubric' header with a project-named one"
     echo "       (e.g., '# <Project> Review Severity Rubric')."
     echo "    2. Delete or rephrase the 'This file is a starter rubric' paragraph."
-    echo "    3. Add at least one project-specific clause under P1, P2, or P3."
+    echo "    3. Add at least one project-specific clause under P1, P2, or P3 that is"
+    echo "       not in the starter allowlist (see RUBRIC_STARTER_CLAUSES in"
+    echo "       scripts/hooks/parsers.sh)."
     echo ""
     echo "  Phase 1 bootstrap (before any bead is in_progress) is exempt."
     exit 1
