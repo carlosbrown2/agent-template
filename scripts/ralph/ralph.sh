@@ -64,6 +64,17 @@ ARCHIVE_FILE="$SCRIPT_DIR/archive.txt"
 CONFIDENCE_LOG="$SCRIPT_DIR/confidence.log"
 RETRY_STATE_FILE="$SCRIPT_DIR/retry_state.json"
 
+# Source routing functions (parse_confidence, read_auto_land_policy,
+# should_auto_land, compute_retry_state, extract_prereq_bead_id) so
+# tests/hooks/ralph.bats exercises the same definitions the loop uses.
+RALPH_LIB="$SCRIPT_DIR/lib.sh"
+if [ ! -f "$RALPH_LIB" ]; then
+  echo "Error: scripts/ralph/lib.sh not found at $RALPH_LIB"
+  return 1
+fi
+# shellcheck source=/dev/null
+source "$RALPH_LIB"
+
 # Retry tracking
 FAIL_COUNT=0
 LAST_FAILED_BEAD=""
@@ -95,60 +106,6 @@ finish() {
   echo "---------------------------------------------------------------"
   _ralph_cleanup
   RALPH_EXIT_CODE=$code
-}
-
-# --- Confidence routing functions ---
-
-# Extract confidence level from agent output.
-# Patterns require the closing `>` so the placeholder string
-# `<confidence level="HIGH|MEDIUM|LOW">` from prompt.md does not match.
-parse_confidence() {
-  local output="$1"
-  if echo "$output" | grep -q '<confidence level="HIGH">'; then
-    echo "HIGH"
-  elif echo "$output" | grep -q '<confidence level="MEDIUM">'; then
-    echo "MEDIUM"
-  elif echo "$output" | grep -q '<confidence level="LOW">'; then
-    echo "LOW"
-  else
-    echo ""
-  fi
-}
-
-# Read auto-land policy from CLAUDE.md ## Confidence Routing section.
-# Default is "all" — matches the README/CLAUDE.md template's stated default.
-# (If you want a stricter default, set `auto-land: high` or `auto-land: none`
-# under `## Confidence Routing` in CLAUDE.md.)
-read_auto_land_policy() {
-  local claude_md="$PROJECT_ROOT/CLAUDE.md"
-  if [[ -f "$claude_md" ]]; then
-    local policy
-    policy=$(grep -A1 "## Confidence Routing" "$claude_md" | grep "auto-land:" | sed 's/.*auto-land: *//')
-    echo "${policy:-all}"
-  else
-    echo "all"
-  fi
-}
-
-# Determine if auto-land is allowed for given confidence + policy
-should_auto_land() {
-  local confidence="$1"
-  local policy="$2"
-  case "$policy" in
-    all)
-      echo "true"
-      ;;
-    high)
-      [[ "$confidence" == "HIGH" ]] && echo "true" || echo "false"
-      ;;
-    none)
-      echo "false"
-      ;;
-    *)
-      # Unknown policy — default to the documented default ("all")
-      echo "true"
-      ;;
-  esac
 }
 
 echo "Starting Ralph - Tool: $TOOL - Max iterations: $MAX_ITERATIONS"
@@ -256,8 +213,11 @@ RETRY_EOF
       # Unclaim the current bead (review/pare/compound that can't proceed)
       bd update "$ACTIVE_BEAD" --status open 2>/dev/null || true
 
-      # Find and re-open the prerequisite bead
-      PREREQ_BEAD=$(bd dep list "$ACTIVE_BEAD" 2>/dev/null | grep -oE '[a-z][-a-z0-9]*-[a-z0-9]{2,}' | head -1) || true
+      # Find and re-open the prerequisite bead. `bd dep list <X>` begins
+      # with "X depends on:" whose bead-id token matches the regex, so
+      # extract_prereq_bead_id excludes the active bead to avoid re-opening
+      # it (a no-op) instead of the real prerequisite.
+      PREREQ_BEAD=$(bd dep list "$ACTIVE_BEAD" 2>/dev/null | extract_prereq_bead_id "$ACTIVE_BEAD") || true
       if [[ -n "$PREREQ_BEAD" ]]; then
         bd update "$PREREQ_BEAD" --status open 2>/dev/null || true
         echo "  Re-opened prerequisite $PREREQ_BEAD for rework."
@@ -274,21 +234,21 @@ RETRY_EOF
     echo "WARNING: No exit signal detected at iteration $i. Agent may have stopped unexpectedly."
 
     # --- Retry tracking ---
+    # compute_retry_state (lib.sh) is a pure transition — no bd calls,
+    # no file writes — so tests can cover the increment / reset / escalation
+    # boundaries without mocking the CLI.
     FAILED_BEAD="$ACTIVE_BEAD"
 
     if [[ -n "$FAILED_BEAD" ]]; then
-      if [[ "$FAILED_BEAD" == "$LAST_FAILED_BEAD" ]]; then
-        FAIL_COUNT=$((FAIL_COUNT + 1))
-      else
-        # New bead failed — start tracking from 1
-        FAIL_COUNT=1
-        LAST_FAILED_BEAD="$FAILED_BEAD"
-      fi
+      RETRY_STATE=$(compute_retry_state "$FAILED_BEAD" "$LAST_FAILED_BEAD" "$FAIL_COUNT" "$MAX_RETRIES")
+      FAIL_COUNT="${RETRY_STATE%%|*}"
+      RETRY_REST="${RETRY_STATE#*|}"
+      LAST_FAILED_BEAD="${RETRY_REST%%|*}"
+      RETRY_ACTION="${RETRY_STATE##*|}"
 
       echo "Retry tracking: bead=$FAILED_BEAD fail_count=$FAIL_COUNT/$MAX_RETRIES"
 
-      # Safety-net escalation: if agent failed MAX_RETRIES times without escalating
-      if [[ $FAIL_COUNT -ge $MAX_RETRIES ]]; then
+      if [[ "$RETRY_ACTION" == "escalate" ]]; then
         echo "ESCALATION (safety net): Bead $FAILED_BEAD failed $FAIL_COUNT times."
         echo "  Unclaiming bead and filing blocker..."
 
@@ -327,7 +287,7 @@ RETRY_EOF
   # --- Confidence routing ---
   CONFIDENCE=$(parse_confidence "$OUTPUT")
   if [[ -n "$CONFIDENCE" ]]; then
-    POLICY=$(read_auto_land_policy)
+    POLICY=$(read_auto_land_policy "$PROJECT_ROOT/CLAUDE.md")
     AUTO_LAND=$(should_auto_land "$CONFIDENCE" "$POLICY")
 
     # Log every routing decision for auditability

@@ -16,7 +16,7 @@ Every place agent variance can enter this project must appear here, paired with 
 | Scope creep | every commit | `.current-bead-scope` declares allowed paths; infrastructure paths always allowed | scope enforcement hook in scripts/hooks/install.sh | bounded |
 | Artifact format | review / research beads | review artifacts cite the rubric and contain a severity clause | review artifact validator hook | bounded |
 | Sampling variance | every model invocation | `--print` mode, single-shot, fresh context per bead | scripts/ralph/ralph.sh invocation; one-bead-per-iteration | bounded |
-| Confidence | exit signal | `<confidence>` tag with HIGH/MEDIUM/LOW | scripts/ralph/ralph.sh parse_confidence + auto-land routing | bounded |
+| Confidence | exit signal | `<confidence>` tag with HIGH/MEDIUM/LOW | scripts/ralph/lib.sh defines parse_confidence / read_auto_land_policy / should_auto_land (sourced by scripts/ralph/ralph.sh); tests/hooks/ralph.bats exercises the regex anchors, the auto-land policy matrix, and the prompt.md-placeholder adversarial case | bounded |
 | Verification truth | every "done" claim | one command from CLAUDE.md, not agent judgment | scripts/ralph/ralph.sh parses `<gate-result>` and persists to .last-gate-result; pre-push hook from scripts/hooks/install.sh re-runs the gate command on git push and blocks on divergence | bounded |
 | Architectural choice | new subsystem design | escalate to human; agent does not decide alone | `<promise>BLOCKED</promise>` with reason | escalation-only |
 
