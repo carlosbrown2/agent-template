@@ -69,6 +69,9 @@ Clean up after testing:
 
 ```bash
 rm -rf .beads AGENTS.md .pytest_cache
+# .beads: created by `bd init`
+# AGENTS.md: created by Amp on first run (analogous to Claude Code's CLAUDE.md)
+# .pytest_cache: created if the test bead's verification gate runs pytest
 ```
 
 ## Questions?
