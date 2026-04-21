@@ -518,14 +518,19 @@ if [ ! -f "$CLAUDE_MD" ]; then
   exit 0
 fi
 
-# Convention: the gate is the first fenced code block directly under the
-# "## Verification Gate" heading in CLAUDE.md.
-GATE_CMD=$(awk '
-  /^## Verification Gate[[:space:]]*$/ { in_section = 1; next }
-  in_section && /^## / { in_section = 0 }
-  in_section && /^```/ { in_fence = !in_fence; next }
-  in_section && in_fence { print }
-' "$CLAUDE_MD")
+# Single-source the gate extractor so this hook and tests/hooks/gate.bats
+# cannot drift. See gate_command_extract in scripts/hooks/parsers.sh.
+PARSERS_LIB="$PROJECT_ROOT/scripts/hooks/parsers.sh"
+if [ ! -f "$PARSERS_LIB" ]; then
+  echo "BLOCKED: scripts/hooks/parsers.sh not found at $PARSERS_LIB."
+  echo "  The pre-push hook depends on gate_command_extract from this file."
+  echo "  Run ./scripts/hooks/install.sh from the project root to (re)install."
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$PARSERS_LIB"
+
+GATE_CMD=$(gate_command_extract "$CLAUDE_MD")
 
 if [ -z "$GATE_CMD" ]; then
   echo "BLOCKED: no verification gate found under '## Verification Gate' in CLAUDE.md."

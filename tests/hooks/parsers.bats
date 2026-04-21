@@ -573,6 +573,87 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+# --- gate_command_extract -----------------------------------------------
+
+@test "gate_command_extract: extracts the first fenced block under '## Verification Gate'" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+# Project
+
+## Other section
+
+```
+some other fence
+```
+
+## Verification Gate
+
+```
+bash -n foo.sh && bash -n bar.sh
+```
+
+## After
+EOF
+  run gate_command_extract "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ "$output" = "bash -n foo.sh && bash -n bar.sh" ]
+}
+
+@test "gate_command_extract: preserves multi-line gate bodies verbatim" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Verification Gate
+
+```
+bash -n scripts/a.sh && \
+  bash -n scripts/b.sh && \
+  bats tests/
+```
+EOF
+  run gate_command_extract "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bash -n scripts/a.sh"* ]]
+  [[ "$output" == *"bats tests/"* ]]
+}
+
+@test "gate_command_extract: prints nothing when the heading has no fence" {
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Verification Gate
+
+Prose only, no fence here.
+
+## Next
+EOF
+  run gate_command_extract "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "gate_command_extract: stops at the next '## ' heading" {
+  # A fenced block that lives under a later heading must not be included.
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Verification Gate
+
+```
+real gate
+```
+
+## Discovered Patterns
+
+```
+unrelated block
+```
+EOF
+  run gate_command_extract "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ "$output" = "real gate" ]
+  [[ "$output" != *"unrelated"* ]]
+}
+
+@test "gate_command_extract: returns empty for a missing file" {
+  run gate_command_extract "$TMPDIR_TEST/does-not-exist.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 # --- Smoke tests against the real project registers ---------------------
 # These catch drift: if the real registers in this repo ever diverge from
 # what the parsers accept, the CI gate fails loudly.
@@ -610,4 +691,11 @@ EOF
 @test "smoke: real docs/skills/review-rubric.md passes rubric_edit_check" {
   run rubric_edit_check "$PROJECT_ROOT/docs/skills/review-rubric.md"
   [ "$status" -eq 0 ]
+}
+
+@test "smoke: real CLAUDE.md has an extractable verification gate" {
+  run gate_command_extract "$PROJECT_ROOT/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  [[ "$output" == *"bats tests/hooks/"* ]]
 }

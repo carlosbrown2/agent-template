@@ -284,6 +284,23 @@ review_artifact_clauses_check() {
   return 0
 }
 
+# gate_command_extract <claude-md-path>
+# Prints the verification gate command declared in CLAUDE.md as the first fenced
+# code block directly under the "## Verification Gate" heading. Single source of
+# truth for the extractor so the pre-push hook (scripts/hooks/install.sh) and
+# the gate regression suite (tests/hooks/gate.bats) cannot drift from each other.
+# Returns 0 always; callers check for empty output (no gate found).
+gate_command_extract() {
+  local claude_md="$1"
+  [ -f "$claude_md" ] || return 0
+  awk '
+    /^## Verification Gate[[:space:]]*$/ { in_section = 1; next }
+    in_section && /^## / { in_section = 0 }
+    in_section && /^```/ { in_fence = !in_fence; next }
+    in_section && in_fence { print }
+  ' "$claude_md"
+}
+
 # claude_model_tags_check <claude-md-path>
 claude_model_tags_check() {
   local claude_md="$1"
