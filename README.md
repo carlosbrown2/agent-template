@@ -1,5 +1,7 @@
 # Initializer
 
+[![CI](https://github.com/carlosbrown2/initializer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/carlosbrown2/initializer/actions/workflows/ci.yml)
+
 A GitHub repo template that acts as an **initializer agent** — it sets up the development infrastructure, environment, and project scaffolding that subsequent coding agents will use. Built on the Ralph loop and Compound Engineering patterns with [Beads](https://github.com/steveyegge/beads) issue tracking.
 
 Inspired by the [initializer agent pattern](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) from Anthropic's engineering team: a specialized first-session agent that creates the foundation (project rules, dev scripts, progress tracking, verification gates) so every subsequent agent session starts with clean context and clear direction.
