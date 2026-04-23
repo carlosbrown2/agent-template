@@ -17,7 +17,7 @@ Before you emit `BEAD_DONE`, all of the following must be true:
 2. The verification gate (single command from `CLAUDE.md`) is green.
 3. You emitted `<gate-result>PASS</gate-result>` (or `FAIL` if the gate failed and you're escalating).
 4. `.current-bead-type` and `.current-bead-scope` (if it was set) have been removed.
-5. `scripts/ralph/archive.txt` has a new progress entry.
+5. `scripts/ralph/archive.txt` has a new progress entry with the exact header `## YYYY-MM-DD HH:MM - <bead-id>` (the ralph loop's `archive_schema_check` verifies every BEAD_DONE iteration has a matching block — a missing block fails the next push).
 6. You emitted a `<confidence>` signal immediately followed by `<promise>BEAD_DONE</promise>`.
 
 The bead-type-specific contracts below add further requirements per type. They do not replace these six.
@@ -27,16 +27,16 @@ The bead-type-specific contracts below add further requirements per type. They d
 These are the states that must hold before you exit. Sequence the work however you like — but every state below must be true when you emit your exit signal. Use the bead-type contracts below to know what "the bead's work is complete" means for your specific type.
 
 - **A bead has been claimed or resumed.** If `bd ready` returns nothing, emit `<promise>COMPLETE</promise>` and stop instead.
-- **`.current-bead-type` exists** and contains exactly one of `impl|review|pare|compound|research`. The pre-commit gate is fail-closed: if you try to commit while a bead is in progress and this marker is missing or invalid, you will be blocked. (How you decide the type is your call — the bead's phase label, title prefix, or context.)
+- **`.current-bead-type` exists** and contains exactly one of `impl|review|pare|compound|research`. The pre-commit gate is fail-closed: if you try to commit while a bead is in progress and this marker is missing or invalid, you will be blocked.
 - **For `impl`, `pare`, and `compound` beads, `.current-bead-scope` exists** and lists the in-scope file paths (one per line). The scope hook rejects commits that touch anything outside this list, except for infrastructure paths (the registers, the archive, the patterns file, the bead-marker files; plus `CLAUDE.md`, `docs/skills/`, and `tests/regression/` for compound beads).
 - **If this is a retry** (`scripts/ralph/retry_state.json` shows `fail_count > 0` for this bead), the prior attempt has been diagnosed in `scripts/ralph/archive.txt` and the new approach is *meaningfully different* from the old one. On the third attempt, the strategy is fundamentally different or you have escalated via `BLOCKED`.
 - **The bead's type-specific work is complete** (see the bead-type contracts below).
 - **The failure-mode register has been updated** for any new failure mode this bead introduced. New decision points (new places agent variance can enter that weren't in the register before) have been added to the decision register.
 - **The verification gate has been run** and its outcome reported as `<gate-result>PASS</gate-result>` or `<gate-result>FAIL</gate-result>`.
 - **The bead is closed in beads** and beads state is persisted.
-- **`scripts/ralph/archive.txt` has a new progress entry** describing what was done, register updates, and learnings. Reusable patterns are also in `scripts/ralph/patterns.md`. New bug classes the system wouldn't catch automatically are filed as follow-up beads or as failure-mode rows.
+- **`scripts/ralph/archive.txt` has a new progress entry** with the required `## YYYY-MM-DD HH:MM - <bead-id>` header (see Progress report format below). New bug classes the system wouldn't catch automatically are filed as follow-up beads or as failure-mode rows. Reusable patterns also go in `scripts/ralph/patterns.md`.
 - **The marker files are absent** (`.current-bead-type` and `.current-bead-scope` removed).
-- **A `<confidence>` signal has been emitted immediately before `<promise>BEAD_DONE</promise>`.** Both are required, in that order.
+- **A `<confidence>` signal has been emitted immediately before `<promise>BEAD_DONE</promise>`.** Both are required, in that order. ralph.sh's `parse_confidence_bead_done` anchors the signal to the promise — a confidence tag anywhere else in your output (e.g. inside rationale text) will not be routed on.
 
 ## Bead-type contracts
 
@@ -49,7 +49,7 @@ Done when **all** of:
 - Every new failure mode introduced by this code has a row in `docs/failure-modes.md` with Status = `covered` (or `proven-impossible` with a written argument).
 - Every new decision point introduced by this code (a new place agent variance can enter the project that wasn't covered before) has a row in `docs/decision-register.md` with Status = `bounded`, `agent-discretion`, or `escalation-only`.
 - The diff is within the bead's declared file scope (`.current-bead-scope`); the scope enforcement hook will reject anything outside.
-- Commit message: `feat: [bead-id] - <title>`.
+- Commit message: `feat: [bead-id] - <title>`. The commit-msg hook enforces this shape — `feat: banana` will be rejected.
 
 How to build the checks is your choice. If you want a menu of techniques, load `docs/skills/backpressure-catalog.md`. Pick the strongest available. Invent better when you can.
 
@@ -58,7 +58,7 @@ How to build the checks is your choice. If you want a menu of techniques, load `
 Done when **all** of:
 - A review artifact exists at `docs/reviews/<bead-id>.md` containing findings classified by severity (P1 = fix inline, P2 = file as new bead, P3 = log to archive.txt). Each finding cites a clause from `docs/skills/review-rubric.md` so the verdict is bounded by a checked-in rubric, not by the model's intuition.
 - You have **adversarially attempted to falsify** the failure-mode register: for each row touching modules in this story, ask whether you can construct an input or sequence that triggers the failure and slips past the listed check. Document attempts in the artifact.
-- You have **adversarially attempted to falsify** the decision register: for each row touching this story, ask whether you can find an agent action that fell inside this decision point but bypassed the listed bounding mechanism (e.g., a commit that should have been scope-blocked but wasn't, a pattern promoted without a model tag, a "done" claim not backed by the gate).
+- You have **adversarially attempted to falsify** the decision register: for each row touching this story, ask whether you can find an agent action that fell inside this decision point but bypassed the listed bounding mechanism.
 - No source files were modified — review beads are read-only analysis. The pre-commit hook enforces this when `.current-bead-type=review`.
 - Commit message: `review: [bead-id] - <title>`.
 
@@ -95,13 +95,19 @@ Done when **all** of:
 
 Emit immediately before `<promise>BEAD_DONE</promise>`. Both are required — never emit `BEAD_DONE` without a confidence signal.
 
+The tag format is:
+
 ```
-<confidence level="HIGH|MEDIUM|LOW">One-line rationale</confidence>
+<confidence level="{ONE_OF_HIGH_MEDIUM_LOW}">One-line rationale</confidence>
 ```
+
+Replace `{ONE_OF_HIGH_MEDIUM_LOW}` with the actual level (`HIGH`, `MEDIUM`, or `LOW`). The placeholder token `{ONE_OF_HIGH_MEDIUM_LOW}` is deliberately not a valid level — if the agent echoes this example verbatim without substituting, `parse_confidence` returns empty rather than routing on a false match. This closes the "agent pasted the instruction as its answer" spoof.
 
 - **HIGH** — All acceptance criteria met, gate green, registers updated, no ambiguity. Auto-land allowed under `auto-land: all` and `auto-land: high`.
 - **MEDIUM** — Criteria met but with minor uncertainty (edge case coverage, spec interpretation). Pauses for human review unless policy is `auto-land: all`.
 - **LOW** — Significant uncertainty (partial criteria, workaround applied, retry-after-failure). Always pauses for human review.
+
+The parser requires the tag to immediately precede `<promise>BEAD_DONE</promise>`. Discussion of confidence levels earlier in your rationale will not be matched — only the final tag counts.
 
 ## Exit signals
 
@@ -116,10 +122,10 @@ Emit exactly **one** of these. ralph.sh routes on the signal.
 
 ## Progress report format
 
-APPEND to `scripts/ralph/archive.txt` (never replace existing content):
+APPEND to `scripts/ralph/archive.txt` (never replace existing content). The header line is machine-parsed by `archive_schema_check` — it MUST be exactly:
 
 ```
-## [Date/Time] - [Bead ID]
+## YYYY-MM-DD HH:MM - <bead-id>
 - Type: [impl|review|pare-down|compound|research]
 - What was done
 - Files changed
@@ -131,7 +137,7 @@ APPEND to `scripts/ralph/archive.txt` (never replace existing content):
 ---
 ```
 
-If you discover a reusable pattern, also add it to `scripts/ralph/patterns.md`.
+The date+time (or date alone) and `<bead-id>` separated by ` - ` are required — `archive_schema_check` matches `^## [0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]][0-9]{2}:[0-9]{2})? - <bead-id>$`. A different header shape will still parse as prose but will fail the schema check on the next push. If you discover a reusable pattern, also add it to `scripts/ralph/patterns.md`.
 
 ## Stop
 

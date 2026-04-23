@@ -82,13 +82,16 @@ teardown() {
 
 # --- read_auto_land_policy ----------------------------------------------
 
-@test "read_auto_land_policy: returns 'all' when file is missing" {
+@test "read_auto_land_policy: returns 'high' (new safer default) when file is missing" {
+  # Default flipped from 'all' to 'high' so a template whose shipped
+  # CLAUDE.md is missing or unreadable pauses on non-HIGH rather than
+  # silently auto-landing everything.
   run read_auto_land_policy "$TMPDIR_TEST/does-not-exist.md"
   [ "$status" -eq 0 ]
-  [ "$output" = "all" ]
+  [ "$output" = "high" ]
 }
 
-@test "read_auto_land_policy: returns 'all' when section has no auto-land line" {
+@test "read_auto_land_policy: returns 'high' when section has no auto-land line" {
   cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
 # Proj
 
@@ -100,7 +103,7 @@ prose here, no setting
 EOF
   run read_auto_land_policy "$TMPDIR_TEST/CLAUDE.md"
   [ "$status" -eq 0 ]
-  [ "$output" = "all" ]
+  [ "$output" = "high" ]
 }
 
 @test "read_auto_land_policy: extracts 'high' across a blank line between heading and value" {
@@ -153,6 +156,8 @@ EOF
 @test "read_auto_land_policy: stops at the next '## ' heading" {
   # A setting in a later section must not be harvested. Binds the extractor
   # to the routing section specifically, not to "any auto-land: in the file".
+  # Falls back to the documented default ('high') since the routing section
+  # itself has no setting.
   cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
 ## Confidence Routing
 
@@ -160,11 +165,11 @@ EOF
 
 ## Other section
 
-auto-land: high
+auto-land: all
 EOF
   run read_auto_land_policy "$TMPDIR_TEST/CLAUDE.md"
   [ "$status" -eq 0 ]
-  [ "$output" = "all" ]
+  [ "$output" = "high" ]
 }
 
 @test "read_auto_land_policy: strips trailing whitespace from the value" {
@@ -222,13 +227,25 @@ EOF
   done
 }
 
-@test "should_auto_land: unknown policy falls back to documented default (all -> true)" {
-  # A typo in CLAUDE.md (e.g., "auto-land: al") must not silently become
-  # "false" — that would pause every iteration unexpectedly. The default
-  # is the documented one: "all".
+@test "should_auto_land: unknown policy falls back to safer 'high' default (HIGH -> true)" {
+  # A typo in CLAUDE.md (e.g., "auto-land: al") falls back to the new safer
+  # default ("high"), not the old permissive default ("all"). HIGH confidence
+  # still auto-lands; MEDIUM/LOW pause. This is the downstream-safer choice
+  # for a template whose default propagates to every project built on it.
   run should_auto_land "HIGH" "al"
   [ "$status" -eq 0 ]
   [ "$output" = "true" ]
+}
+
+@test "should_auto_land: unknown policy, MEDIUM -> false (safer default)" {
+  # Complement to the above: with an unrecognized policy, MEDIUM does NOT
+  # auto-land. Previously this test would have returned "true" because the
+  # old fallback was "all"; now it returns "false" because the fallback is
+  # "high". A downstream project that mistypes its policy gets paused
+  # iterations on MEDIUM rather than silent auto-land.
+  run should_auto_land "MEDIUM" "garbage"
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
 }
 
 # --- compute_retry_state ------------------------------------------------
@@ -339,4 +356,104 @@ EOF
     "$PROJECT_ROOT/scripts/ralph/lib.sh" "$input" "agent-template-6ij"
   [ "$status" -eq 0 ]
   [ "$output" = "agent-template-first" ]
+}
+
+# --- parse_confidence_bead_done -----------------------------------------
+
+@test "parse_confidence_bead_done: matches tag immediately before BEAD_DONE" {
+  input='<confidence level="HIGH">all criteria met</confidence><promise>BEAD_DONE</promise>'
+  run parse_confidence_bead_done "$input"
+  [ "$status" -eq 0 ]
+  [ "$output" = "HIGH" ]
+}
+
+@test "parse_confidence_bead_done: tolerates whitespace/newline between tag and promise" {
+  input='<confidence level="MEDIUM">edge case unclear</confidence>
+
+<promise>BEAD_DONE</promise>'
+  run parse_confidence_bead_done "$input"
+  [ "$status" -eq 0 ]
+  [ "$output" = "MEDIUM" ]
+}
+
+@test "parse_confidence_bead_done: rationale referencing OTHER levels does not spoof" {
+  # Adversarial case: the agent's rationale discusses a LOW signal earlier
+  # in the output, then emits the real HIGH tag immediately before
+  # BEAD_DONE. parse_confidence (legacy) would have returned HIGH only
+  # because of grep precedence — but the real contract is "the signal
+  # right before the promise wins." Binding the match to the promise is
+  # the falsifiable version of that contract.
+  input='First I thought <confidence level="LOW">partial</confidence> but on review
+everything holds.
+
+<confidence level="HIGH">all green</confidence>
+<promise>BEAD_DONE</promise>'
+  run parse_confidence_bead_done "$input"
+  [ "$status" -eq 0 ]
+  [ "$output" = "HIGH" ]
+}
+
+@test "parse_confidence_bead_done: reverse spoof attempt — HIGH mentioned first, LOW actual" {
+  # The opposite spoof: agent mentions HIGH in rationale, then emits LOW
+  # as the real signal. Legacy parse_confidence returned HIGH (precedence
+  # cascade); parse_confidence_bead_done returns LOW (the one actually
+  # attached to BEAD_DONE).
+  input='Earlier this looked <confidence level="HIGH">easy</confidence> but it turns out
+the test is only partial coverage.
+
+<confidence level="LOW">partial criteria met, workaround applied</confidence>
+<promise>BEAD_DONE</promise>'
+  run parse_confidence_bead_done "$input"
+  [ "$status" -eq 0 ]
+  [ "$output" = "LOW" ]
+}
+
+@test "parse_confidence_bead_done: returns empty when tag is not adjacent to BEAD_DONE" {
+  # Tag appears but BEAD_DONE is not the next thing. The caller must treat
+  # this as "no signal" rather than guess. Prevents a stray tag elsewhere
+  # in the output from routing on.
+  input='<confidence level="HIGH">looks ok</confidence>
+
+Now let me also mention that the failure-modes register has a new row.
+
+<promise>BEAD_DONE</promise>'
+  run parse_confidence_bead_done "$input"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "parse_confidence_bead_done: returns empty when output contains no BEAD_DONE promise" {
+  input='<confidence level="HIGH">ok</confidence><promise>BLOCKED</promise><blocked-reason>x</blocked-reason>'
+  run parse_confidence_bead_done "$input"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "parse_confidence_bead_done: ignores the unmatchable placeholder from prompt.md" {
+  # prompt.md's example uses "{ONE_OF_HIGH_MEDIUM_LOW}" as the placeholder,
+  # which is not a valid level. If the agent copy-pastes the example
+  # verbatim and emits BEAD_DONE right after, the parser must not route
+  # on it. Defense-in-depth: even if the BEAD_DONE anchor passes, the
+  # level must be one of HIGH/MEDIUM/LOW.
+  input='<confidence level="{ONE_OF_HIGH_MEDIUM_LOW}">rationale</confidence>
+<promise>BEAD_DONE</promise>'
+  run parse_confidence_bead_done "$input"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# --- BEAD_ID_REGEX drift --------------------------------------------------
+
+@test "BEAD_ID_REGEX in lib.sh matches PARSERS_BEAD_ID_REGEX in parsers.sh byte-for-byte" {
+  # The two libraries historically drifted (lib.sh used [a-z], install.sh
+  # grep used [a-z_]) and no test compared them. This smoke test is the
+  # structural backstop for CLAUDE.md's "Bead id shape lives in exactly
+  # one place per library" invariant.
+  # shellcheck source=/dev/null
+  source "$PROJECT_ROOT/scripts/ralph/lib.sh"
+  # shellcheck source=/dev/null
+  source "$PROJECT_ROOT/scripts/hooks/parsers.sh"
+  [ -n "$BEAD_ID_REGEX" ]
+  [ -n "$PARSERS_BEAD_ID_REGEX" ]
+  [ "$BEAD_ID_REGEX" = "$PARSERS_BEAD_ID_REGEX" ]
 }

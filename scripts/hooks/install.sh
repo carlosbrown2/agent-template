@@ -3,44 +3,22 @@
 # Run this once after cloning a project created from Initializer.
 #
 # Hooks installed (pre-commit, in execution order inside the hook):
-#   1. CLAUDE.md size guard — rejects commits pushing CLAUDE.md beyond the line limit
-#      (default 200). Domain knowledge belongs in docs/skills/, not the constitution.
-#   2. Dependency hallucination check — validates new packages against registries.
-#      Ships COMMENTED OUT; uncomment after installing dep-hallucinator.
-#   3. Bead type fail-closed gate — when a bead is in_progress, .current-bead-type
-#      must exist and hold one of impl|review|pare|compound|research. Closes the
-#      "forget the marker → no enforcement" bypass for the hooks below.
-#   4. Rubric-edit guard — when a bead is in_progress, docs/skills/review-rubric.md
-#      must not still contain the "starter rubric" disclaimer. Phase 1 bootstrap
-#      (no in-progress bead) is exempt. Bounds the "Review verdict" decision point.
-#   5. Review/research bead write-protection — when .current-bead-type is review or
-#      research, only files under docs/reviews/ may change.
-#   6. Scope enforcement — rejects commits touching files outside the current bead's
-#      declared scope (.current-bead-scope). Always-allowed infrastructure paths are
-#      exempt. impl/pare/compound beads MUST have a scope file or the hook blocks.
-#   7. Failure-mode register integrity — every row in docs/failure-modes.md must have an
-#      acceptable Status (covered | proven-impossible | out-of-scope), and every check
-#      file it references must exist on disk.
-#   8. Decision register integrity — docs/decision-register.md must contain the baseline
-#      decision points (Solution selection, Acceptance interpretation, Sampling variance,
-#      Verification truth, Scope creep), every row must have ≥5 columns and an acceptable
-#      Status (bounded | ritual-bounded | agent-discretion | escalation-only), and every
-#      bounding-mechanism file path it references must exist on disk.
-#   9. Review artifact validator — when .current-bead-type=review, files staged in
-#      docs/reviews/ must cite docs/skills/review-rubric.md, contain at least one
-#      severity clause citation (P1.foo, P2.foo, P3.foo), AND every cited clause
-#      must exist as a `**P[123].name**` definition in the rubric (membership check
-#      via review_artifact_clauses_check in scripts/hooks/parsers.sh).
-#  10. CLAUDE.md model-tag validator — every entry under ## Discovered Patterns in
-#      CLAUDE.md must carry a `model:` tag identifying its source model.
+#   1. CLAUDE.md size guard
+#   2. Dependency hallucination check (commented out)
+#   3. Bead type fail-closed gate (now fail-closed on bd extraction failure too)
+#   4. Rubric-edit guard
+#   5. Review/research bead write-protection
+#   6. Scope enforcement
+#   7. Failure-mode register integrity
+#   8. Decision register integrity
+#   9. Review artifact validator
+#  10. CLAUDE.md model-tag validator
 #
 # Also installed:
-#   commit-msg: enforces "<type>: ..." prefix on every commit message
-#               (feat|fix|refactor|review|compound|research|docs|chore|test).
+#   commit-msg: enforces "<type>: [bead-id] - <title>" format on bead commits
+#               (or "<type>: <description>" for non-bead commits).
 #   pre-push:   re-runs the verification gate declared under "## Verification Gate"
-#               in CLAUDE.md. Blocks the push if the real gate fails, even when the
-#               agent self-reported PASS. Closes the gate-bypass hole that ralph.sh
-#               alone cannot cover (it only checks the <gate-result> tag is present).
+#               in CLAUDE.md.
 #
 # Usage: ./scripts/hooks/install.sh
 
@@ -62,12 +40,10 @@ cat > "$GIT_HOOKS_DIR/pre-commit" << 'HOOK_EOF'
 set -euo pipefail
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
-CLAUDE_MD="$PROJECT_ROOT/CLAUDE.md"
 CLAUDE_MD_MAX_LINES=200
 
 # Register-integrity parsers live in scripts/hooks/parsers.sh so they can be
 # exercised by tests/hooks/parsers.bats outside a live pre-commit context.
-# Drift between the generated hook and the parsers is prevented by sourcing.
 PARSERS_LIB="$PROJECT_ROOT/scripts/hooks/parsers.sh"
 if [ ! -f "$PARSERS_LIB" ]; then
   echo "BLOCKED: scripts/hooks/parsers.sh not found at $PARSERS_LIB."
@@ -94,9 +70,7 @@ if git diff --cached --name-only | grep -q "^CLAUDE.md$"; then
 fi
 
 # --- Dependency hallucination check ---
-# Uncomment the lines below after installing dep-hallucinator:
-#   pip install dep-hallucinator   (Python)
-#   npm install -g dep-hallucinator (Node)
+# Uncomment after installing dep-hallucinator:
 #
 # MANIFEST_FILES=$(git diff --cached --name-only | grep -E '(requirements.*\.txt|package\.json|pyproject\.toml|Cargo\.toml|go\.mod)' || true)
 # if [ -n "$MANIFEST_FILES" ]; then
@@ -111,21 +85,34 @@ fi
 #   fi
 # fi
 
-# --- Bead type detection (fail-closed) ---
-# When a bead is in progress (per the beads CLI), .current-bead-type MUST exist and
-# hold a valid value. This closes the "forget to write the marker → no enforcement"
-# bypass that would otherwise let scope enforcement, write protection, and the
-# review-artifact validator silently no-op. During Phase 1 (before any beads exist)
-# bd returns no in-progress bead and the gate is a no-op, so bootstrap commits work.
+# --- Bead type detection (fail-closed on bd errors too) ---
+# When a bead is in progress (per the beads CLI), .current-bead-type MUST exist
+# and hold a valid value. Previously this block conditioned on a grep-based
+# extraction that silently returned empty on bd format changes, bypassing the
+# whole gate chain. bd_bead_in_progress (parsers.sh) uses --json and returns
+# non-zero on extraction failure, so a broken bd BLOCKS the commit instead of
+# silently letting it through. Phase 1 bootstrap (no bd installed) still passes.
 BEAD_TYPE_FILE="$PROJECT_ROOT/.current-bead-type"
 BEAD_TYPE=""
 if [ -f "$BEAD_TYPE_FILE" ]; then
-  BEAD_TYPE=$(cat "$BEAD_TYPE_FILE" | tr -d '[:space:]')
+  BEAD_TYPE=$(tr -d '[:space:]' < "$BEAD_TYPE_FILE")
 fi
 
 IN_PROGRESS_BEAD=""
 if command -v bd >/dev/null 2>&1; then
-  IN_PROGRESS_BEAD=$(bd list --status=in_progress 2>/dev/null | grep -o '[a-z_]*-[a-z0-9]*-[a-z0-9]*' | head -1) || true
+  if ! IN_PROGRESS_BEAD=$(bd_bead_in_progress); then
+    echo "BLOCKED: unable to determine in-progress bead state from bd."
+    echo ""
+    echo "  bd_bead_in_progress failed (bd list --status=in_progress errored or"
+    echo "  produced non-parseable JSON). This hook is fail-closed: if we can't"
+    echo "  verify there is no in-progress bead, we refuse the commit rather than"
+    echo "  let the bead-type / scope / write-protection gates silently no-op."
+    echo ""
+    echo "  How to fix: run 'bd list --status=in_progress --json' manually and"
+    echo "  resolve the error (bd version drift, database corruption, missing"
+    echo "  bd init, etc.) before committing."
+    exit 1
+  fi
 fi
 
 if [ -n "$IN_PROGRESS_BEAD" ]; then
@@ -155,15 +142,6 @@ if [ -n "$IN_PROGRESS_BEAD" ]; then
 fi
 
 # --- Rubric-edit guard (Phase 1 completion check) ---
-# The shipped docs/skills/review-rubric.md carries a "starter rubric" disclaimer,
-# a generic header, and a fixed set of starter clauses. Phase 1 contract
-# (project-kickoff-prompt.md): the disclaimer must be replaced, the header must
-# be renamed, and at least one project-specific clause must be added. Without
-# this, "Review verdict" in the decision register cannot legitimately be claimed
-# `bounded` — the rubric is not actually project-specific. The check itself
-# lives in scripts/hooks/parsers.sh as rubric_edit_check so the bats suite
-# under tests/hooks/ exercises it directly. Phase 1 bootstrap (no in-progress
-# bead) is exempt so the very first commits can land.
 RUBRIC_FILE="$PROJECT_ROOT/docs/skills/review-rubric.md"
 if [ -n "$IN_PROGRESS_BEAD" ] && [ -f "$RUBRIC_FILE" ]; then
   if ! reason=$(rubric_edit_check "$RUBRIC_FILE"); then
@@ -190,14 +168,13 @@ if [ -n "$IN_PROGRESS_BEAD" ] && [ -f "$RUBRIC_FILE" ]; then
 fi
 
 # --- Review/research bead write protection ---
-# Review and research beads are read-only analysis: only docs/reviews/ may be modified.
 if [ "$BEAD_TYPE" = "review" ] || [ "$BEAD_TYPE" = "research" ]; then
   NON_REVIEW_FILES=$(git diff --cached --name-only | grep -v "^docs/reviews/" || true)
   if [ -n "$NON_REVIEW_FILES" ]; then
     echo "BLOCKED: $BEAD_TYPE beads are read-only — only docs/reviews/ files may be modified."
     echo ""
     echo "  Rejected files:"
-    echo "$NON_REVIEW_FILES" | sed 's/^/    /'
+    echo "$NON_REVIEW_FILES" | awk '{print "    "$0}'
     echo ""
     echo "  How to fix:"
     echo "    - Write all findings to docs/reviews/<story-id>.md instead of modifying source"
@@ -208,13 +185,8 @@ if [ "$BEAD_TYPE" = "review" ] || [ "$BEAD_TYPE" = "research" ]; then
 fi
 
 # --- Scope enforcement (bead-level) ---
-# Each bead declares its in-scope files/directories in .current-bead-scope (one path
-# per line). impl, pare, and compound beads MUST have this file present, or the hook
-# blocks. Always-allowed infrastructure paths (the registers, the archive, the patterns
-# file, the bead-marker files) are exempt regardless of declared scope.
 SCOPE_FILE="$PROJECT_ROOT/.current-bead-scope"
 
-# Always-permitted infrastructure paths (modifiable by any bead type)
 INFRA_PATHS=(
   "docs/failure-modes.md"
   "docs/decision-register.md"
@@ -226,8 +198,6 @@ INFRA_PATHS=(
   ".current-bead-scope"
 )
 
-# Compound beads also need to write CLAUDE.md, docs/skills/, and tests/regression/
-# (regression tests for newly-discovered bug classes are part of the compound DoD).
 if [ "$BEAD_TYPE" = "compound" ]; then
   INFRA_PATHS+=("CLAUDE.md" "docs/skills/" "tests/regression/")
 fi
@@ -242,7 +212,6 @@ is_infra_path() {
   return 1
 }
 
-# impl/pare/compound beads must have a scope file
 case "$BEAD_TYPE" in
   impl|pare|compound)
     if [ ! -f "$SCOPE_FILE" ]; then
@@ -264,7 +233,6 @@ if [ -f "$SCOPE_FILE" ]; then
   ALLOWED_PATHS=()
   while IFS= read -r line; do
     [ -z "$line" ] && continue
-    # Skip lines that look like comments
     case "$line" in \#*) continue ;; esac
     ALLOWED_PATHS+=("$line")
   done < "$SCOPE_FILE"
@@ -273,7 +241,6 @@ if [ -f "$SCOPE_FILE" ]; then
   while IFS= read -r file; do
     [ -z "$file" ] && continue
 
-    # Always allow infrastructure paths
     if is_infra_path "$file"; then
       continue
     fi
@@ -310,7 +277,7 @@ if [ -f "$SCOPE_FILE" ]; then
   fi
 fi
 
-# --- Failure-mode register integrity (parsers in scripts/hooks/parsers.sh) ---
+# --- Failure-mode register integrity ---
 FM_REGISTER="$PROJECT_ROOT/docs/failure-modes.md"
 if [ -f "$FM_REGISTER" ]; then
   if ! bad_rows=$(fm_status_check "$FM_REGISTER"); then
@@ -324,7 +291,7 @@ if [ -f "$FM_REGISTER" ]; then
     echo "  Each row must be a single line (multi-line continuation rows are not supported)."
     echo ""
     echo "  Offending rows:"
-    echo "$bad_rows" | sed 's/^/    /'
+    echo "$bad_rows" | awk '{print "    "$0}'
     echo ""
     echo "  How to fix: bind each row to a mechanical check, or move the row's coverage"
     echo "  to a follow-up bead and mark it explicitly."
@@ -342,7 +309,7 @@ if [ -f "$FM_REGISTER" ]; then
   fi
 fi
 
-# --- Decision register integrity (parsers in scripts/hooks/parsers.sh) ---
+# --- Decision register integrity ---
 DEC_REGISTER="$PROJECT_ROOT/docs/decision-register.md"
 if [ -f "$DEC_REGISTER" ]; then
   if ! missing=$(dec_required_rows_check "$DEC_REGISTER"); then
@@ -367,7 +334,7 @@ if [ -f "$DEC_REGISTER" ]; then
     echo "  Multi-line continuation rows are not supported — keep each row on one line."
     echo ""
     echo "  Offending rows:"
-    echo "$bad_rows" | sed 's/^/    /'
+    echo "$bad_rows" | awk '{print "    "$0}'
     exit 1
   fi
 
@@ -383,17 +350,17 @@ if [ -f "$DEC_REGISTER" ]; then
 fi
 
 # --- Review artifact validator ---
-# When .current-bead-type=review, files staged in docs/reviews/ must:
-#   1. Cite docs/skills/review-rubric.md (the bounding mechanism for "review verdict")
-#   2. Contain at least one severity clause citation (P1.foo, P2.foo, P3.foo)
-#   3. Every cited clause must exist as a definition in docs/skills/review-rubric.md
-#      (closes the shape-vs-membership Goodhart: previously any well-formed token
-#      passed regardless of whether the rubric defined it).
-# Research artifacts are not subject to this — they don't classify findings by severity.
+# Quote-safe iteration: previous `for f in $REVIEW_FILES; do` word-split on
+# IFS, which would corrupt filenames containing spaces. Read NUL-separated
+# list via `git diff -z` and iterate with `while IFS= read -r`.
 if [ "$BEAD_TYPE" = "review" ]; then
-  REVIEW_FILES=$(git diff --cached --name-only --diff-filter=AM | grep '^docs/reviews/.*\.md$' || true)
   RUBRIC_PATH="$PROJECT_ROOT/docs/skills/review-rubric.md"
-  for f in $REVIEW_FILES; do
+  while IFS= read -r -d '' f; do
+    [ -z "$f" ] && continue
+    case "$f" in
+      docs/reviews/*.md) ;;
+      *) continue ;;
+    esac
     [ -f "$PROJECT_ROOT/$f" ] || continue
 
     if ! grep -qF 'docs/skills/review-rubric.md' "$PROJECT_ROOT/$f"; then
@@ -419,7 +386,7 @@ if [ "$BEAD_TYPE" = "review" ]; then
       echo "BLOCKED: $f cites clauses that are not defined in docs/skills/review-rubric.md."
       echo ""
       echo "  Offending clauses:"
-      echo "$invented_clauses" | sed 's/^/    /'
+      echo "$invented_clauses" | awk '{print "    "$0}'
       echo ""
       echo "  The validator extracts the canonical clause set from bold-marker definitions"
       echo "  ('**P[123].name**') in the rubric. Citing a clause that isn't defined makes"
@@ -433,10 +400,10 @@ if [ "$BEAD_TYPE" = "review" ]; then
       echo "       of the canonical set (no separate registration step is needed)."
       exit 1
     fi
-  done
+  done < <(git diff --cached --name-only --diff-filter=AM -z)
 fi
 
-# --- CLAUDE.md model-tag validator (parser in scripts/hooks/parsers.sh) ---
+# --- CLAUDE.md model-tag validator ---
 if git diff --cached --name-only | grep -qx 'CLAUDE.md'; then
   if ! bad_patterns=$(claude_model_tags_check "$PROJECT_ROOT/CLAUDE.md"); then
     echo "BLOCKED: CLAUDE.md ## Discovered Patterns has entries without a model: tag."
@@ -451,7 +418,7 @@ if git diff --cached --name-only | grep -qx 'CLAUDE.md'; then
     echo "    why: ..."
     echo ""
     echo "  Offending entries (line: heading):"
-    echo "$bad_patterns" | sed 's/^/    /'
+    echo "$bad_patterns" | awk '{print "    "$0}'
     exit 1
   fi
 fi
@@ -462,34 +429,64 @@ HOOK_EOF
 chmod +x "$GIT_HOOKS_DIR/pre-commit"
 
 # --- Commit-msg hook (commit message format validation) ---
+# Now actually enforces the [bead-id] - <title> structure advertised by
+# prompt.md for bead commits. Non-bead commits (no bracketed id) still
+# pass if they have a valid type prefix and a non-empty description.
 cat > "$GIT_HOOKS_DIR/commit-msg" << 'HOOK_EOF'
 #!/bin/bash
 # Commit-msg hook: enforce ralph bead commit message format
 set -euo pipefail
 
-MSG=$(cat "$1")
+MSG=$(head -1 "$1")
 
 # Allow merge commits
-if echo "$MSG" | head -1 | grep -qE "^Merge "; then
+if echo "$MSG" | grep -qE "^Merge "; then
   exit 0
 fi
 
-# Allowed prefixes: feat, fix, refactor, review, compound, research, docs, chore, test
-# Format: <type>: [<bead-id>] - <title>
-#   or:   <type>: <description>  (for non-bead commits)
-if ! echo "$MSG" | head -1 | grep -qE "^(feat|fix|refactor|review|compound|research|docs|chore|test): "; then
+# Type prefix check
+if ! echo "$MSG" | grep -qE "^(feat|fix|refactor|review|compound|research|docs|chore|test): "; then
   echo "BLOCKED: Commit message must start with a valid type prefix."
   echo ""
-  echo "  Format:  <type>: [Story ID] - <title>"
+  echo "  Format:  <type>: [bead-id] - <title>  (bead commits)"
+  echo "       or: <type>: <description>        (non-bead commits)"
   echo "  Allowed: feat | fix | refactor | review | compound | research | docs | chore | test"
-  echo "  Got:     $(echo "$MSG" | head -1)"
+  echo "  Got:     $MSG"
   echo ""
   echo "  Examples:"
   echo "    feat:     [story-abc123] - Add user authentication"
   echo "    review:   [story-abc123] - Review user authentication"
   echo "    research: [story-abc123] - Survey existing OAuth implementations"
   echo "    fix:      [story-abc123] - Fix login redirect loop"
+  echo "    chore:    update README"
   exit 1
+fi
+
+# Strip the "<type>: " prefix so we can inspect what follows.
+REMAINDER=$(echo "$MSG" | sed -E 's/^(feat|fix|refactor|review|compound|research|docs|chore|test): //')
+
+# Case 1: bracketed bead-id form. If it starts with "[", require the full shape.
+# Bead id regex matches scripts/ralph/lib.sh BEAD_ID_REGEX.
+if echo "$REMAINDER" | grep -qE '^\['; then
+  if ! echo "$REMAINDER" | grep -qE '^\[[a-z][-a-z0-9]*-[a-z0-9]{2,}\] - .+$'; then
+    echo "BLOCKED: Bead commit message does not match '[bead-id] - <title>' format."
+    echo ""
+    echo "  Got: $MSG"
+    echo ""
+    echo "  Expected form after the type prefix:"
+    echo "    [bead-id] - <title>"
+    echo ""
+    echo "  where bead-id matches [a-z][-a-z0-9]*-[a-z0-9]{2,} (e.g. agent-template-4mw)."
+    echo "  The ' - ' separator between the bracketed id and the title is required."
+    exit 1
+  fi
+else
+  # Case 2: non-bead form. Just require a non-empty description.
+  if [ -z "$REMAINDER" ]; then
+    echo "BLOCKED: Commit message is empty after the type prefix."
+    echo "  Got: $MSG"
+    exit 1
+  fi
 fi
 
 exit 0
@@ -498,12 +495,6 @@ HOOK_EOF
 chmod +x "$GIT_HOOKS_DIR/commit-msg"
 
 # --- Pre-push hook (re-runs the verification gate from CLAUDE.md) ---
-# Closes the gate-bypass hole: ralph.sh only verifies the <gate-result> tag is
-# present, not that the gate actually ran. The pre-push hook extracts the gate
-# command from CLAUDE.md and runs it for real, so the observed exit code is the
-# source of truth at push time. If ralph.sh has written .last-gate-result from
-# the agent's self-report, a divergence (self-reported PASS, observed FAIL) is
-# called out explicitly in the block message.
 cat > "$GIT_HOOKS_DIR/pre-push" << 'HOOK_EOF'
 #!/bin/bash
 # Pre-push hook: re-run the verification gate declared in CLAUDE.md and block
@@ -546,8 +537,6 @@ else
   OBSERVED="FAIL"
 fi
 
-# Read the agent's self-reported gate result if ralph.sh persisted one.
-# Absent file → no divergence claim to check; the real exit code is authoritative.
 SELF_REPORT=""
 SELF_REPORT_FILE="$PROJECT_ROOT/.last-gate-result"
 if [ -f "$SELF_REPORT_FILE" ]; then
@@ -592,5 +581,5 @@ echo "  - Pre-commit: Review artifact validator (active — fires only if .curre
 echo "  - Pre-commit: CLAUDE.md model-tag validator (active — fires only if CLAUDE.md is staged)"
 echo "  - Pre-commit: CLAUDE.md size guard (active)"
 echo "  - Pre-commit: Dependency hallucination check (commented out — uncomment after installing dep-hallucinator)"
-echo "  - Commit-msg: Format validation (active — feat|fix|refactor|review|compound|research|docs|chore|test)"
+echo "  - Commit-msg: Format validation (active — [bead-id] - <title> enforced for bead commits)"
 echo "  - Pre-push:   Verification gate re-run (active — extracts gate from CLAUDE.md and compares against .last-gate-result if present)"

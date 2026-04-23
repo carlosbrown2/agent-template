@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The verification gate is the merge contract. Running it in CI means a PR
+  # that breaks ralph.bats / parsers.bats / gate.bats is caught before merge,
+  # not after. The gate itself invokes `bats tests/hooks/` — the recursion
+  # hazard with gate.bats's "gate passes against the current repo" sanity
+  # test is handled by the _BATS_GATE_REENTRY sentinel (see gate.bats).
+  verification-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (bats, shellcheck, jq)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats shellcheck jq
+
+      - name: Install bd (Beads CLI)
+        run: |
+          # CI pin: bd >= 0.3.0 (matches CLAUDE.md § Pinned Tool Versions).
+          # npm install is the supported cross-platform path.
+          npm install -g @beads/bd
+          bd --version
+
+      - name: Show tool versions
+        run: |
+          bash --version | head -1
+          bats --version
+          shellcheck --version | head -2
+          jq --version
+          bd --version
+
+      - name: Run verification gate (mirrors CLAUDE.md ## Verification Gate)
+        run: |
+          bash -n scripts/ralph/ralph.sh \
+            && bash -n scripts/ralph/lib.sh \
+            && bash -n scripts/hooks/install.sh \
+            && bash -n scripts/hooks/parsers.sh \
+            && shellcheck -x scripts/ralph/ralph.sh scripts/ralph/lib.sh scripts/hooks/install.sh scripts/hooks/parsers.sh \
+            && bd --version 2>/dev/null | grep -qE '^bd (0\.[3-9]|[1-9])' \
+            && bats tests/hooks/
+
+  # Markdown lint keeps prose drift out of load-bearing files (CLAUDE.md,
+  # prompt.md, the registers). Relaxed config — line length and inline HTML
+  # are disabled because the registers use long table rows and <!-- comments.
+  # Note: shellcheck is not a separate job — it's part of the verification
+  # gate clause above. Running it separately at a different severity could
+  # let a CI pass while the gate fails, defeating the single-source rule.
+  markdown-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: |
+            **/*.md
+            !**/node_modules
+        env:
+          MARKDOWNLINT_CLI2_CONFIG: |
+            {
+              "default": true,
+              "MD013": false,
+              "MD033": false,
+              "MD041": false
+            }

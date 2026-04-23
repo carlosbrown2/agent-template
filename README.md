@@ -47,9 +47,18 @@ The initializer walks you through 5 phases. Each phase is an outcome contract �
 
 2. Install dependencies:
    ```bash
-   # Beads CLI (issue tracking)
+   # Beads CLI (issue tracking) — version 0.3.0 or later required; the verification gate pins it
    brew install beads          # or: npm install -g @beads/bd
    bd init
+
+   # jq (used by ralph.sh and parsers.sh to parse bd --json output)
+   brew install jq             # or: apt-get install jq
+
+   # shellcheck (part of the verification gate; catches quoting / subshell bugs bash -n misses)
+   brew install shellcheck     # or: apt-get install shellcheck
+
+   # bats (runs tests/hooks/; part of the verification gate)
+   brew install bats-core      # or: npm install -g bats
 
    # Pre-commit hooks (optional but recommended)
    ./scripts/hooks/install.sh
@@ -78,17 +87,20 @@ source scripts/ralph/ralph.sh --tool amp 50
 
 ## What's Included
 
+Files committed to the template:
+
 ```
 project-kickoff-prompt.md   # The initializer — outcome contracts for setting up a project
 CLAUDE.md                   # Skeleton project rules (filled in during Phase 1)
 scripts/
   ralph/
     ralph.sh                # The Ralph loop — runs agents one bead at a time
+    lib.sh                  # Pure routing functions (parse_confidence, auto-land, retry state)
     prompt.md               # Per-iteration outcome contract for each agent session
     patterns.md             # Codebase patterns discovered during implementation
-    archive.txt             # Per-run progress log appended by each iteration (gitignored)
   hooks/
     install.sh              # Pre-commit hook installer (9 hooks — see Configuration)
+    parsers.sh              # Register parser library sourced by both hooks and bats tests
 docs/
   failure-modes.md          # The failure-mode register (created in Phase 1)
   decision-register.md      # The decision register (created in Phase 1)
@@ -99,31 +111,52 @@ docs/
   reviews/                  # Review/research artifacts (created/deleted during triads)
 tasks/                      # PRDs live here
 tests/
+  hooks/                    # bats suite covering parsers, gate, and ralph routing
   regression/               # Regression tests from bugs found during the project
 ```
 
+### Runtime-generated files (gitignored)
+
+These appear after the first ralph iteration and are **not** shipped with the template. Do not expect them to exist on a fresh clone:
+
+- `scripts/ralph/archive.txt` — Per-bead progress log, one `## <date> - <bead-id>` block per BEAD_DONE. Machine-parsed by `archive_schema_check` in the verification gate.
+- `scripts/ralph/confidence.log` — One line per iteration with `bead`, `bead_done`, `confidence`, `policy`, `auto_land`, `gate_result`. Authoritative source for the archive schema check.
+- `scripts/ralph/retry_state.json` — Written each iteration so the agent can see whether it's retrying a previously-failed bead and how many times.
+- `.last-gate-result` — The agent's self-reported `<gate-result>` tag from the last iteration; compared against the real gate exit on pre-push.
+- `.current-bead-type` — `impl`, `review`, `pare`, `compound`, or `research`. Gate is fail-closed when a bead is in progress without this marker.
+- `.current-bead-scope` — One file path per line; the scope-enforcement hook rejects commits outside this set.
+
 ## Configuration
 
-- **Auto-land policy** — Set in `CLAUDE.md` under `## Confidence Routing`. Options: `all` (default), `high`, `none`.
+- **Auto-land policy** — Set in `CLAUDE.md` under `## Confidence Routing`. Options: `all`, `high` (default for new projects), `none`. The shipped starter CLAUDE.md declares `high` so projects bootstrapped from the template pause on MEDIUM / LOW confidence until the gate is strong enough to trust. The template's *own* CLAUDE.md uses `all` because the gate is fully fleshed out and the principal is the template author.
 - **CLAUDE.md size limit** — Default 200 lines, enforced by pre-commit hook. Overflow goes to `docs/skills/`.
-- **Max retries** — Default 3, set in `ralph.sh` (`MAX_RETRIES`).
+- **Max retries** — Default 3, set in `ralph.sh` (`_RALPH_MAX_RETRIES`).
 - **Max iterations** — Default 30, passed as argument to `ralph.sh`.
 
 ### Pre-commit hooks (installed by `./scripts/hooks/install.sh`)
 
 | Hook | What it enforces |
 |---|---|
-| Bead type fail-closed gate | When a bead is in progress, `.current-bead-type` must exist and hold a valid value (`impl`/`review`/`pare`/`compound`/`research`). Closes the "skip the marker → no enforcement" bypass for the hooks below. |
+| Bead type fail-closed gate | When a bead is in progress, `.current-bead-type` must exist and hold a valid value (`impl`/`review`/`pare`/`compound`/`research`). Closes the "skip the marker → no enforcement" bypass for the hooks below. Also fail-closed on `bd` extraction errors: if `bd list --status=in_progress --json` fails or returns non-parseable JSON, the commit is BLOCKED rather than silently treated as "no bead in progress". |
 | Scope enforcement | `impl`/`pare`/`compound` beads must declare `.current-bead-scope`; commits outside the scope are rejected (infrastructure paths exempted; compound beads also get `CLAUDE.md`, `docs/skills/`, and `tests/regression/`). |
 | Failure-mode register integrity | Every row in `docs/failure-modes.md` is single-line, its last cell holds an acceptable Status (`covered`/`proven-impossible`/`out-of-scope`), and every referenced check file exists. |
 | Decision register integrity | `docs/decision-register.md` has all baseline rows; every row is single-line with ≥5 columns and a last-cell Status of `bounded`/`ritual-bounded`/`agent-discretion`/`escalation-only`; every referenced bounding-mechanism file exists. |
 | Review/research write-protection | When `.current-bead-type` is `review` or `research`, only `docs/reviews/` may change. |
-| Review-artifact validator | Files in `docs/reviews/` (during a `review` bead) cite `docs/skills/review-rubric.md` and contain at least one `P[123].clause-name` severity marker. |
+| Review-artifact validator | Files in `docs/reviews/` (during a `review` bead) cite `docs/skills/review-rubric.md` and contain at least one `P[123].clause-name` severity marker, and every cited clause is defined in the rubric. Quote-safe iteration (filenames with spaces are handled). |
 | CLAUDE.md model-tag validator | Every `### ` entry under `## Discovered Patterns` carries an anchored `model:` tag. |
 | CLAUDE.md size guard | Rejects commits pushing `CLAUDE.md` over 200 lines. |
-| Commit-message format | Enforces `feat\|fix\|refactor\|review\|compound\|research\|docs\|chore\|test: ...` prefix. |
+| Commit-message format | Enforces `feat\|fix\|refactor\|review\|compound\|research\|docs\|chore\|test: ...` prefix, and when the message begins with `[`, enforces the full `[bead-id] - <title>` shape. |
 
 A tenth hook, **dependency hallucination check**, ships commented out — uncomment after installing `dep-hallucinator` (or your preferred equivalent).
+
+A **pre-push** hook is also installed; it re-runs the verification gate declared under `## Verification Gate` in `CLAUDE.md`. The gate includes `shellcheck -x`, a `bd` version floor check, and the full bats suite. Divergence between the agent's self-reported gate result and the real observed result is called out explicitly in the block message.
+
+### Why not the `pre-commit` framework?
+
+We install git hooks directly from `scripts/hooks/install.sh` rather than using the Python [pre-commit](https://pre-commit.com/) framework. The tradeoff:
+
+- **For this template**: zero extra dependencies (no Python env needed just to commit), hook definitions are plain bash readable in the same file, and the install step is a single script. The failure-mode register can name exactly what each hook enforces.
+- **Against this template**: projects already using `pre-commit` for other languages can't drop these hooks into their existing config. If that's you, wrap the generated hooks in a local `pre-commit` repo — each hook already `set -euo pipefail`s and exits non-zero on failure, which is the pre-commit contract.
 
 ## Credits
 

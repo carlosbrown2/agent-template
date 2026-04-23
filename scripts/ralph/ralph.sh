@@ -1,16 +1,66 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
 # Usage: source ralph.sh [--tool amp|claude] [max_iterations]
+#
+# State hygiene: every script-scope variable is prefixed with `_RALPH_` and
+# explicitly unset in `_ralph_cleanup` so sourcing the script does not leak
+# state into the caller's shell. Every early `return` path calls cleanup
+# before exiting so `set -u` (applied here) does not persist to the caller.
 
 # Save shell options and restore on exit (safe for sourcing)
 [[ -o nounset ]] && _RALPH_HAD_NOUNSET=1 || _RALPH_HAD_NOUNSET=0
 set -u
+
 _ralph_cleanup() {
-  [[ "$_RALPH_HAD_NOUNSET" -eq 0 ]] && set +u
+  [[ "${_RALPH_HAD_NOUNSET:-0}" -eq 0 ]] && set +u
   unset _RALPH_HAD_NOUNSET
-  unset -f _ralph_cleanup
+  unset _RALPH_TOOL _RALPH_MAX_ITERATIONS
+  unset _RALPH_SCRIPT_DIR _RALPH_PROJECT_ROOT
+  unset _RALPH_PROMPT_FILE _RALPH_PATTERNS_FILE _RALPH_ARCHIVE_FILE
+  unset _RALPH_CONFIDENCE_LOG _RALPH_RETRY_STATE_FILE _RALPH_LIB
+  unset _RALPH_FAIL_COUNT _RALPH_LAST_FAILED_BEAD _RALPH_MAX_RETRIES
+  unset _RALPH_I _RALPH_CURRENT_BEAD _RALPH_ACTIVE_BEAD
+  unset _RALPH_BEAD_ID _RALPH_BEAD_TITLE _RALPH_OUTPUT
+  unset _RALPH_BEAD_DONE _RALPH_BLOCKED_REASON _RALPH_REWORK_REASON
+  unset _RALPH_PREREQ_BEAD _RALPH_BLOCKER_TITLE
+  unset _RALPH_GATE_RESULT _RALPH_CONFIDENCE _RALPH_POLICY _RALPH_AUTO_LAND
+  unset _RALPH_FAILED_BEAD _RALPH_RETRY_STATE _RALPH_RETRY_REST _RALPH_RETRY_ACTION
+  unset -f _ralph_cleanup _ralph_bead_in_progress _ralph_bead_ready _ralph_bead_title
 }
 
+# --- Bead id extractors ----------------------------------------------------
+# Single source of truth for how this loop reads bead state from the `bd` CLI.
+# install.sh's pre-commit hook calls the same shapes via its own sourced lib
+# (see bd_bead_in_progress in scripts/hooks/parsers.sh) so the two cannot
+# disagree about what "there is an in-progress bead" means. Both use --json
+# so a `bd` TUI format change does not silently flip the result. Extraction
+# failure (non-zero exit OR non-parseable JSON) prints nothing — callers
+# decide whether empty means "no bead" (benign) or "bd is broken" (block).
+
+_ralph_bead_in_progress() {
+  local out
+  out=$(bd list --status=in_progress --json 2>/dev/null) || return 0
+  jq -r '.[0].id // empty' <<<"$out" 2>/dev/null || return 0
+}
+
+_ralph_bead_ready() {
+  local out
+  out=$(bd ready --json 2>/dev/null) || return 0
+  jq -r '.[0].id // empty' <<<"$out" 2>/dev/null || return 0
+}
+
+_ralph_bead_title() {
+  local id="$1"
+  # `bd show` line 2 format is brittle. Prefer --json if the installed bd
+  # supports it; fall back to the legacy line-2 parse with a safety belt
+  # that returns empty rather than a half-parsed title if the format drifts.
+  local j
+  if j=$(bd show "$id" --json 2>/dev/null) && [ -n "$j" ]; then
+    jq -r '.title // empty' <<<"$j" 2>/dev/null
+    return 0
+  fi
+  bd show "$id" 2>/dev/null | sed -n '2p' | sed 's/^[^·]*· //' | sed 's/  *\[●.*//'
+}
 
 # --- Dependency checks ---
 command -v bd >/dev/null 2>&1 || {
@@ -18,78 +68,81 @@ command -v bd >/dev/null 2>&1 || {
   echo "  Install: brew install beads"
   echo "       or: npm install -g @beads/bd"
   echo "  Then run: bd init"
+  _ralph_cleanup
   return 1
 }
 command -v jq >/dev/null 2>&1 || {
   echo "Error: 'jq' is not installed."
   echo "  Install: brew install jq"
+  _ralph_cleanup
   return 1
 }
 
 # Parse arguments
-TOOL="claude"  # Default to claude
-MAX_ITERATIONS=30
+_RALPH_TOOL="claude"
+_RALPH_MAX_ITERATIONS=30
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --tool)
-      TOOL="$2"
+      _RALPH_TOOL="$2"
       shift 2
       ;;
     --tool=*)
-      TOOL="${1#*=}"
+      _RALPH_TOOL="${1#*=}"
       shift
       ;;
     *)
-      # Assume it's max_iterations if it's a number
       if [[ "$1" =~ ^[0-9]+$ ]]; then
-        MAX_ITERATIONS="$1"
+        _RALPH_MAX_ITERATIONS="$1"
       fi
       shift
       ;;
   esac
 done
 
-# Validate tool choice
-if [[ "$TOOL" != "amp" && "$TOOL" != "claude" ]]; then
-  echo "Error: Invalid tool '$TOOL'. Must be 'amp' or 'claude'."
+if [[ "$_RALPH_TOOL" != "amp" && "$_RALPH_TOOL" != "claude" ]]; then
+  echo "Error: Invalid tool '$_RALPH_TOOL'. Must be 'amp' or 'claude'."
+  _ralph_cleanup
   return 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PROMPT_FILE="$SCRIPT_DIR/prompt.md"
-PATTERNS_FILE="$SCRIPT_DIR/patterns.md"
-ARCHIVE_FILE="$SCRIPT_DIR/archive.txt"
-CONFIDENCE_LOG="$SCRIPT_DIR/confidence.log"
-RETRY_STATE_FILE="$SCRIPT_DIR/retry_state.json"
+_RALPH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+_RALPH_PROJECT_ROOT="$(cd "$_RALPH_SCRIPT_DIR/../.." && pwd)"
+_RALPH_PROMPT_FILE="$_RALPH_SCRIPT_DIR/prompt.md"
+_RALPH_PATTERNS_FILE="$_RALPH_SCRIPT_DIR/patterns.md"
+_RALPH_ARCHIVE_FILE="$_RALPH_SCRIPT_DIR/archive.txt"
+_RALPH_CONFIDENCE_LOG="$_RALPH_SCRIPT_DIR/confidence.log"
+_RALPH_RETRY_STATE_FILE="$_RALPH_SCRIPT_DIR/retry_state.json"
 
-# Source routing functions (parse_confidence, read_auto_land_policy,
-# should_auto_land, compute_retry_state, extract_prereq_bead_id) so
-# tests/hooks/ralph.bats exercises the same definitions the loop uses.
-RALPH_LIB="$SCRIPT_DIR/lib.sh"
-if [ ! -f "$RALPH_LIB" ]; then
-  echo "Error: scripts/ralph/lib.sh not found at $RALPH_LIB"
+# Source routing functions (parse_confidence, parse_confidence_bead_done,
+# read_auto_land_policy, should_auto_land, compute_retry_state,
+# extract_prereq_bead_id) so tests/hooks/ralph.bats exercises the same
+# definitions the loop uses.
+_RALPH_LIB="$_RALPH_SCRIPT_DIR/lib.sh"
+if [ ! -f "$_RALPH_LIB" ]; then
+  echo "Error: scripts/ralph/lib.sh not found at $_RALPH_LIB"
+  _ralph_cleanup
   return 1
 fi
 # shellcheck source=/dev/null
-source "$RALPH_LIB"
+source "$_RALPH_LIB"
 
 # Retry tracking
-FAIL_COUNT=0
-LAST_FAILED_BEAD=""
-MAX_RETRIES=3
+_RALPH_FAIL_COUNT=0
+_RALPH_LAST_FAILED_BEAD=""
+_RALPH_MAX_RETRIES=3
 
 # Initialize patterns file if it doesn't exist
-if [ ! -f "$PATTERNS_FILE" ]; then
-  echo "## Codebase Patterns" > "$PATTERNS_FILE"
+if [ ! -f "$_RALPH_PATTERNS_FILE" ]; then
+  echo "## Codebase Patterns" > "$_RALPH_PATTERNS_FILE"
 fi
 
 # Initialize archive file if it doesn't exist
-if [ ! -f "$ARCHIVE_FILE" ]; then
-  echo "# Ralph Progress Log" > "$ARCHIVE_FILE"
-  echo "Started: $(date)" >> "$ARCHIVE_FILE"
-  echo "---" >> "$ARCHIVE_FILE"
+if [ ! -f "$_RALPH_ARCHIVE_FILE" ]; then
+  echo "# Ralph Progress Log" > "$_RALPH_ARCHIVE_FILE"
+  echo "Started: $(date)" >> "$_RALPH_ARCHIVE_FILE"
+  echo "---" >> "$_RALPH_ARCHIVE_FILE"
 fi
 
 finish() {
@@ -104,46 +157,52 @@ finish() {
     echo "Ralph exited with code $code."
   fi
   echo "---------------------------------------------------------------"
-  _ralph_cleanup
   RALPH_EXIT_CODE=$code
+  _ralph_cleanup
 }
 
-echo "Starting Ralph - Tool: $TOOL - Max iterations: $MAX_ITERATIONS"
+echo "Starting Ralph - Tool: $_RALPH_TOOL - Max iterations: $_RALPH_MAX_ITERATIONS"
 RALPH_EXIT_CODE=""
 
-for i in $(seq 1 $MAX_ITERATIONS); do
+for _RALPH_I in $(seq 1 "$_RALPH_MAX_ITERATIONS"); do
   echo ""
   echo "==============================================================="
-  echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL)"
+  echo "  Ralph Iteration $_RALPH_I of $_RALPH_MAX_ITERATIONS ($_RALPH_TOOL)"
   echo "==============================================================="
 
-  # --- Write retry state for the agent to read ---
-  # Detect current in-progress bead (if any)
-  CURRENT_BEAD=$(bd list --status=in_progress --json 2>/dev/null | jq -r '.[0].id // empty') || true
+  # Capture the active bead ONCE at the top of the iteration and reuse it
+  # everywhere below. Previously a second `bd list` ran after the agent
+  # returned — by which point the agent had already `bd close`d the bead on
+  # BEAD_DONE, so the snapshot came back empty and every successful iteration
+  # was logged as `bead=unknown`. See confidence.log entries from 2026-04-21
+  # for the signature pattern: iter=1..12 all bead=unknown on BEAD_DONE,
+  # iter=2 and iter=8 show real ids because the agent stalled without
+  # closing. One pre-run capture fixes both cases.
+  _RALPH_ACTIVE_BEAD=$(_ralph_bead_in_progress)
 
   # If we're tracking a failed bead and a different bead is now in progress, reset
-  if [[ -n "$LAST_FAILED_BEAD" && -n "$CURRENT_BEAD" && "$CURRENT_BEAD" != "$LAST_FAILED_BEAD" ]]; then
-    FAIL_COUNT=0
-    LAST_FAILED_BEAD=""
+  if [[ -n "$_RALPH_LAST_FAILED_BEAD" && -n "$_RALPH_ACTIVE_BEAD" && "$_RALPH_ACTIVE_BEAD" != "$_RALPH_LAST_FAILED_BEAD" ]]; then
+    _RALPH_FAIL_COUNT=0
+    _RALPH_LAST_FAILED_BEAD=""
   fi
 
   # Write retry state file for the agent
-  cat > "$RETRY_STATE_FILE" << RETRY_EOF
-{"fail_count": $FAIL_COUNT, "bead_id": "${LAST_FAILED_BEAD:-}", "iteration": $i}
+  cat > "$_RALPH_RETRY_STATE_FILE" << RETRY_EOF
+{"fail_count": $_RALPH_FAIL_COUNT, "bead_id": "${_RALPH_LAST_FAILED_BEAD:-}", "iteration": $_RALPH_I}
 RETRY_EOF
 
   # --- Show upcoming work ---
-  BEAD_ID=""
-  BEAD_TITLE=""
-  if [[ -n "$CURRENT_BEAD" ]]; then
-    BEAD_ID="$CURRENT_BEAD"
-    BEAD_TITLE=$(bd show "$BEAD_ID" 2>/dev/null | sed -n '2p' | sed 's/^[^·]*· //' | sed 's/  *\[●.*//')
-    echo "Resuming: $BEAD_ID — $BEAD_TITLE"
+  _RALPH_BEAD_ID=""
+  _RALPH_BEAD_TITLE=""
+  if [[ -n "$_RALPH_ACTIVE_BEAD" ]]; then
+    _RALPH_BEAD_ID="$_RALPH_ACTIVE_BEAD"
+    _RALPH_BEAD_TITLE=$(_ralph_bead_title "$_RALPH_BEAD_ID")
+    echo "Resuming: $_RALPH_BEAD_ID — $_RALPH_BEAD_TITLE"
   else
-    BEAD_ID=$(bd ready --json 2>/dev/null | jq -r '.[0].id // empty') || true
-    if [[ -n "$BEAD_ID" ]]; then
-      BEAD_TITLE=$(bd show "$BEAD_ID" 2>/dev/null | sed -n '2p' | sed 's/^[^·]*· //' | sed 's/  *\[●.*//')
-      echo "Current bead: $BEAD_ID — $BEAD_TITLE"
+    _RALPH_BEAD_ID=$(_ralph_bead_ready)
+    if [[ -n "$_RALPH_BEAD_ID" ]]; then
+      _RALPH_BEAD_TITLE=$(_ralph_bead_title "$_RALPH_BEAD_ID")
+      echo "Current bead: $_RALPH_BEAD_ID — $_RALPH_BEAD_TITLE"
     else
       echo "No beads ready — agent will check and emit COMPLETE."
     fi
@@ -151,163 +210,149 @@ RETRY_EOF
   echo "---------------------------------------------------------------"
 
   # Run the selected tool with the ralph prompt
-  if [[ "$TOOL" == "amp" ]]; then
-    OUTPUT=$(cat "$PROMPT_FILE" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
+  if [[ "$_RALPH_TOOL" == "amp" ]]; then
+    _RALPH_OUTPUT=$(amp --dangerously-allow-all < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
   else
-    # Claude Code: use --dangerously-skip-permissions for autonomous operation, --print for output
-    OUTPUT=$(claude --dangerously-skip-permissions --print < "$PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
+    # Claude Code: --dangerously-skip-permissions for autonomous operation, --print for output
+    _RALPH_OUTPUT=$(claude --dangerously-skip-permissions --print < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
   fi
 
   # Check for completion signal (all work done)
-  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
-    finish 0 "Ralph completed all tasks at iteration $i of $MAX_ITERATIONS."
+  if echo "$_RALPH_OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
+    finish 0 "Ralph completed all tasks at iteration $_RALPH_I of $_RALPH_MAX_ITERATIONS."
     break
   fi
 
   # Check for rate limit signal
-  if echo "$OUTPUT" | grep -qi "You've hit your limit\|you have hit your limit\|rate limit\|usage limit"; then
-    finish 2 "Ralph hit agent rate limit at iteration $i. Exiting gracefully."
+  if echo "$_RALPH_OUTPUT" | grep -qi "You've hit your limit\|you have hit your limit\|rate limit\|usage limit"; then
+    finish 2 "Ralph hit agent rate limit at iteration $_RALPH_I. Exiting gracefully."
     break
   fi
 
   # --- Exit signal routing ---
-  BEAD_DONE=false
+  _RALPH_BEAD_DONE=false
 
-  # Determine the current in-progress bead for signal handling
-  ACTIVE_BEAD=$(bd list --status=in_progress --json 2>/dev/null | jq -r '.[0].id // empty') || true
+  if echo "$_RALPH_OUTPUT" | grep -q "<promise>BEAD_DONE</promise>"; then
+    _RALPH_BEAD_DONE=true
+    _RALPH_FAIL_COUNT=0
+    _RALPH_LAST_FAILED_BEAD=""
+    rm -f "$_RALPH_RETRY_STATE_FILE"
+    echo "Bead completed successfully at iteration $_RALPH_I."
 
-  if echo "$OUTPUT" | grep -q "<promise>BEAD_DONE</promise>"; then
-    BEAD_DONE=true
-    FAIL_COUNT=0
-    LAST_FAILED_BEAD=""
-    rm -f "$RETRY_STATE_FILE"
-    echo "Bead completed successfully at iteration $i."
+  elif echo "$_RALPH_OUTPUT" | grep -q "<promise>BLOCKED</promise>"; then
+    _RALPH_BLOCKED_REASON=$(echo "$_RALPH_OUTPUT" | sed -n 's/.*<blocked-reason>\(.*\)<\/blocked-reason>.*/\1/p' | head -1)
+    _RALPH_BLOCKED_REASON="${_RALPH_BLOCKED_REASON:-No reason provided}"
 
-  elif echo "$OUTPUT" | grep -q "<promise>BLOCKED</promise>"; then
-    # --- BLOCKED: agent hit an external/architectural blocker ---
-    BLOCKED_REASON=$(echo "$OUTPUT" | sed -n 's/.*<blocked-reason>\(.*\)<\/blocked-reason>.*/\1/p' | head -1)
-    BLOCKED_REASON="${BLOCKED_REASON:-No reason provided}"
+    echo "BLOCKED at iteration $_RALPH_I: $_RALPH_BLOCKED_REASON"
 
-    echo "BLOCKED at iteration $i: $BLOCKED_REASON"
-
-    if [[ -n "$ACTIVE_BEAD" ]]; then
-      bd update "$ACTIVE_BEAD" --status open 2>/dev/null || true
-      BLOCKER_TITLE="BLOCKED: $ACTIVE_BEAD — $BLOCKED_REASON"
-      bd create --title="$BLOCKER_TITLE" --type=bug --priority=1 2>/dev/null || true
-      echo "  Unclaimed $ACTIVE_BEAD and filed blocker bead."
+    if [[ -n "$_RALPH_ACTIVE_BEAD" ]]; then
+      bd update "$_RALPH_ACTIVE_BEAD" --status open 2>/dev/null || true
+      _RALPH_BLOCKER_TITLE="BLOCKED: $_RALPH_ACTIVE_BEAD — $_RALPH_BLOCKED_REASON"
+      bd create --title="$_RALPH_BLOCKER_TITLE" --type=bug --priority=1 2>/dev/null || true
+      echo "  Unclaimed $_RALPH_ACTIVE_BEAD and filed blocker bead."
     fi
 
-    echo "[$(date -Iseconds)] iter=$i BLOCKED bead=${ACTIVE_BEAD:-unknown} reason=$BLOCKED_REASON" >> "$CONFIDENCE_LOG"
-    FAIL_COUNT=0
-    LAST_FAILED_BEAD=""
-    rm -f "$RETRY_STATE_FILE"
+    echo "[$(date -Iseconds)] iter=$_RALPH_I BLOCKED bead=${_RALPH_ACTIVE_BEAD:-unknown} reason=$_RALPH_BLOCKED_REASON" >> "$_RALPH_CONFIDENCE_LOG"
+    _RALPH_FAIL_COUNT=0
+    _RALPH_LAST_FAILED_BEAD=""
+    rm -f "$_RALPH_RETRY_STATE_FILE"
 
-  elif echo "$OUTPUT" | grep -q "<promise>REWORK_REQUIRED</promise>"; then
-    # --- REWORK_REQUIRED: prior bead's work is insufficient ---
-    REWORK_REASON=$(echo "$OUTPUT" | sed -n 's/.*<rework-reason>\(.*\)<\/rework-reason>.*/\1/p' | head -1)
-    REWORK_REASON="${REWORK_REASON:-No reason provided}"
+  elif echo "$_RALPH_OUTPUT" | grep -q "<promise>REWORK_REQUIRED</promise>"; then
+    _RALPH_REWORK_REASON=$(echo "$_RALPH_OUTPUT" | sed -n 's/.*<rework-reason>\(.*\)<\/rework-reason>.*/\1/p' | head -1)
+    _RALPH_REWORK_REASON="${_RALPH_REWORK_REASON:-No reason provided}"
 
-    echo "REWORK REQUIRED at iteration $i: $REWORK_REASON"
+    echo "REWORK REQUIRED at iteration $_RALPH_I: $_RALPH_REWORK_REASON"
 
-    if [[ -n "$ACTIVE_BEAD" ]]; then
-      # Unclaim the current bead (review/pare/compound that can't proceed)
-      bd update "$ACTIVE_BEAD" --status open 2>/dev/null || true
+    if [[ -n "$_RALPH_ACTIVE_BEAD" ]]; then
+      bd update "$_RALPH_ACTIVE_BEAD" --status open 2>/dev/null || true
 
-      # Find and re-open the prerequisite bead. `bd dep list <X>` begins
-      # with "X depends on:" whose bead-id token matches the regex, so
-      # extract_prereq_bead_id excludes the active bead to avoid re-opening
-      # it (a no-op) instead of the real prerequisite.
-      PREREQ_BEAD=$(bd dep list "$ACTIVE_BEAD" 2>/dev/null | extract_prereq_bead_id "$ACTIVE_BEAD") || true
-      if [[ -n "$PREREQ_BEAD" ]]; then
-        bd update "$PREREQ_BEAD" --status open 2>/dev/null || true
-        echo "  Re-opened prerequisite $PREREQ_BEAD for rework."
+      _RALPH_PREREQ_BEAD=$(bd dep list "$_RALPH_ACTIVE_BEAD" 2>/dev/null | extract_prereq_bead_id "$_RALPH_ACTIVE_BEAD") || true
+      if [[ -n "$_RALPH_PREREQ_BEAD" ]]; then
+        bd update "$_RALPH_PREREQ_BEAD" --status open 2>/dev/null || true
+        echo "  Re-opened prerequisite $_RALPH_PREREQ_BEAD for rework."
       fi
-      echo "  Unclaimed $ACTIVE_BEAD pending rework."
+      echo "  Unclaimed $_RALPH_ACTIVE_BEAD pending rework."
     fi
 
-    echo "[$(date -Iseconds)] iter=$i REWORK bead=${ACTIVE_BEAD:-unknown} reason=$REWORK_REASON" >> "$CONFIDENCE_LOG"
-    FAIL_COUNT=0
-    LAST_FAILED_BEAD=""
-    rm -f "$RETRY_STATE_FILE"
+    echo "[$(date -Iseconds)] iter=$_RALPH_I REWORK bead=${_RALPH_ACTIVE_BEAD:-unknown} reason=$_RALPH_REWORK_REASON" >> "$_RALPH_CONFIDENCE_LOG"
+    _RALPH_FAIL_COUNT=0
+    _RALPH_LAST_FAILED_BEAD=""
+    rm -f "$_RALPH_RETRY_STATE_FILE"
 
   else
-    echo "WARNING: No exit signal detected at iteration $i. Agent may have stopped unexpectedly."
+    echo "WARNING: No exit signal detected at iteration $_RALPH_I. Agent may have stopped unexpectedly."
 
-    # --- Retry tracking ---
-    # compute_retry_state (lib.sh) is a pure transition — no bd calls,
-    # no file writes — so tests can cover the increment / reset / escalation
-    # boundaries without mocking the CLI.
-    FAILED_BEAD="$ACTIVE_BEAD"
+    _RALPH_FAILED_BEAD="$_RALPH_ACTIVE_BEAD"
 
-    if [[ -n "$FAILED_BEAD" ]]; then
-      RETRY_STATE=$(compute_retry_state "$FAILED_BEAD" "$LAST_FAILED_BEAD" "$FAIL_COUNT" "$MAX_RETRIES")
-      FAIL_COUNT="${RETRY_STATE%%|*}"
-      RETRY_REST="${RETRY_STATE#*|}"
-      LAST_FAILED_BEAD="${RETRY_REST%%|*}"
-      RETRY_ACTION="${RETRY_STATE##*|}"
+    if [[ -n "$_RALPH_FAILED_BEAD" ]]; then
+      _RALPH_RETRY_STATE=$(compute_retry_state "$_RALPH_FAILED_BEAD" "$_RALPH_LAST_FAILED_BEAD" "$_RALPH_FAIL_COUNT" "$_RALPH_MAX_RETRIES")
+      _RALPH_FAIL_COUNT="${_RALPH_RETRY_STATE%%|*}"
+      _RALPH_RETRY_REST="${_RALPH_RETRY_STATE#*|}"
+      _RALPH_LAST_FAILED_BEAD="${_RALPH_RETRY_REST%%|*}"
+      _RALPH_RETRY_ACTION="${_RALPH_RETRY_STATE##*|}"
 
-      echo "Retry tracking: bead=$FAILED_BEAD fail_count=$FAIL_COUNT/$MAX_RETRIES"
+      echo "Retry tracking: bead=$_RALPH_FAILED_BEAD fail_count=$_RALPH_FAIL_COUNT/$_RALPH_MAX_RETRIES"
 
-      if [[ "$RETRY_ACTION" == "escalate" ]]; then
-        echo "ESCALATION (safety net): Bead $FAILED_BEAD failed $FAIL_COUNT times."
+      if [[ "$_RALPH_RETRY_ACTION" == "escalate" ]]; then
+        echo "ESCALATION (safety net): Bead $_RALPH_FAILED_BEAD failed $_RALPH_FAIL_COUNT times."
         echo "  Unclaiming bead and filing blocker..."
 
-        # Unclaim the bead
-        bd update "$FAILED_BEAD" --status open 2>/dev/null || true
+        bd update "$_RALPH_FAILED_BEAD" --status open 2>/dev/null || true
 
-        # File a blocker bead
-        BLOCKER_TITLE="BLOCKED: $FAILED_BEAD failed $FAIL_COUNT times — needs manual investigation"
-        bd create --title="$BLOCKER_TITLE" --type=bug --priority=1 2>/dev/null || true
+        _RALPH_BLOCKER_TITLE="BLOCKED: $_RALPH_FAILED_BEAD failed $_RALPH_FAIL_COUNT times — needs manual investigation"
+        bd create --title="$_RALPH_BLOCKER_TITLE" --type=bug --priority=1 2>/dev/null || true
 
-        # Log to confidence log
-        echo "[$(date -Iseconds)] iter=$i ESCALATION bead=$FAILED_BEAD fail_count=$FAIL_COUNT" >> "$CONFIDENCE_LOG"
+        echo "[$(date -Iseconds)] iter=$_RALPH_I ESCALATION bead=$_RALPH_FAILED_BEAD fail_count=$_RALPH_FAIL_COUNT" >> "$_RALPH_CONFIDENCE_LOG"
 
-        # Reset tracking
-        FAIL_COUNT=0
-        LAST_FAILED_BEAD=""
-        rm -f "$RETRY_STATE_FILE"
+        _RALPH_FAIL_COUNT=0
+        _RALPH_LAST_FAILED_BEAD=""
+        rm -f "$_RALPH_RETRY_STATE_FILE"
       fi
     fi
   fi
 
   # --- Gate result extraction ---
-  GATE_RESULT="skipped"
-  if echo "$OUTPUT" | grep -q '<gate-result>PASS</gate-result>'; then
-    GATE_RESULT="PASS"
-  elif echo "$OUTPUT" | grep -q '<gate-result>FAIL</gate-result>'; then
-    GATE_RESULT="FAIL"
+  _RALPH_GATE_RESULT="skipped"
+  if echo "$_RALPH_OUTPUT" | grep -q '<gate-result>PASS</gate-result>'; then
+    _RALPH_GATE_RESULT="PASS"
+  elif echo "$_RALPH_OUTPUT" | grep -q '<gate-result>FAIL</gate-result>'; then
+    _RALPH_GATE_RESULT="FAIL"
   fi
 
-  # Persist the agent's self-reported gate result so the pre-push hook
-  # (installed by scripts/hooks/install.sh) can detect divergence when the
-  # agent claimed PASS but the real gate command fails. This file is
-  # gitignored; it is local runtime state, not a committed artifact.
-  printf '%s\n' "$GATE_RESULT" > "$PROJECT_ROOT/.last-gate-result"
+  printf '%s\n' "$_RALPH_GATE_RESULT" > "$_RALPH_PROJECT_ROOT/.last-gate-result"
 
   # --- Confidence routing ---
-  CONFIDENCE=$(parse_confidence "$OUTPUT")
-  if [[ -n "$CONFIDENCE" ]]; then
-    POLICY=$(read_auto_land_policy "$PROJECT_ROOT/CLAUDE.md")
-    AUTO_LAND=$(should_auto_land "$CONFIDENCE" "$POLICY")
+  # parse_confidence_bead_done binds the confidence signal to the BEAD_DONE
+  # exit so rationale text mentioning other confidence levels (e.g. "earlier
+  # I emitted LOW but upgraded to HIGH") cannot spoof the routing decision.
+  # Falls back to parse_confidence for BLOCKED/REWORK paths where no
+  # BEAD_DONE promise follows the signal.
+  if [[ "$_RALPH_BEAD_DONE" == "true" ]]; then
+    _RALPH_CONFIDENCE=$(parse_confidence_bead_done "$_RALPH_OUTPUT")
+  else
+    _RALPH_CONFIDENCE=$(parse_confidence "$_RALPH_OUTPUT")
+  fi
+  if [[ -n "$_RALPH_CONFIDENCE" ]]; then
+    _RALPH_POLICY=$(read_auto_land_policy "$_RALPH_PROJECT_ROOT/CLAUDE.md")
+    _RALPH_AUTO_LAND=$(should_auto_land "$_RALPH_CONFIDENCE" "$_RALPH_POLICY")
 
-    # Log every routing decision for auditability
-    echo "[$(date -Iseconds)] iter=$i bead=${ACTIVE_BEAD:-unknown} bead_done=$BEAD_DONE confidence=$CONFIDENCE policy=$POLICY auto_land=$AUTO_LAND gate_result=$GATE_RESULT" >> "$CONFIDENCE_LOG"
+    echo "[$(date -Iseconds)] iter=$_RALPH_I bead=${_RALPH_ACTIVE_BEAD:-unknown} bead_done=$_RALPH_BEAD_DONE confidence=$_RALPH_CONFIDENCE policy=$_RALPH_POLICY auto_land=$_RALPH_AUTO_LAND gate_result=$_RALPH_GATE_RESULT" >> "$_RALPH_CONFIDENCE_LOG"
 
-    if [[ "$AUTO_LAND" == "true" ]]; then
-      echo "Auto-land: confidence=$CONFIDENCE, policy=$POLICY"
+    if [[ "$_RALPH_AUTO_LAND" == "true" ]]; then
+      echo "Auto-land: confidence=$_RALPH_CONFIDENCE, policy=$_RALPH_POLICY"
     else
-      echo "Pausing for human review: confidence=$CONFIDENCE, policy=$POLICY"
+      echo "Pausing for human review: confidence=$_RALPH_CONFIDENCE, policy=$_RALPH_POLICY"
       echo "  Press Enter to continue or Ctrl+C to abort..."
       read -r
     fi
   else
-    echo "[$(date -Iseconds)] iter=$i bead=${ACTIVE_BEAD:-unknown} bead_done=$BEAD_DONE confidence=NONE (no signal detected) gate_result=$GATE_RESULT" >> "$CONFIDENCE_LOG"
+    echo "[$(date -Iseconds)] iter=$_RALPH_I bead=${_RALPH_ACTIVE_BEAD:-unknown} bead_done=$_RALPH_BEAD_DONE confidence=NONE (no signal detected) gate_result=$_RALPH_GATE_RESULT" >> "$_RALPH_CONFIDENCE_LOG"
   fi
 
-  echo "Iteration $i complete. Continuing..."
+  echo "Iteration $_RALPH_I complete. Continuing..."
   sleep 2
 done
 
 if [[ -z "$RALPH_EXIT_CODE" ]]; then
-  finish 1 "Ralph reached max iterations ($MAX_ITERATIONS) without completing all tasks. Check $ARCHIVE_FILE for status."
+  finish 1 "Ralph reached max iterations ($_RALPH_MAX_ITERATIONS) without completing all tasks. Check $_RALPH_ARCHIVE_FILE for status."
 fi

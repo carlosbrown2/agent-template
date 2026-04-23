@@ -9,6 +9,53 @@
 #
 # This file is sourced, not executed. Callers manage their own set -e state.
 
+# Single source of truth for bead id shape. Mirrors BEAD_ID_REGEX in
+# scripts/ralph/lib.sh. Kept in sync by tests/hooks/parsers.bats (smoke
+# test: both files define the same value).
+# shellcheck disable=SC2034  # read by callers after sourcing (see ralph.bats)
+PARSERS_BEAD_ID_REGEX='[a-z][-a-z0-9]*-[a-z0-9]{2,}'
+
+# bd_bead_in_progress
+#
+# Print the id of the currently in-progress bead (if any), or empty if none.
+# Returns 0 on success (including the no-bead case), 1 if `bd` itself
+# failed or returned non-parseable JSON. Callers in a fail-closed chain
+# should check the exit code and BLOCK on non-zero, not just an empty
+# stdout — otherwise a silent `bd` failure bypasses the entire gate chain
+# that conditions on "is a bead in progress?"
+#
+# Uses --json throughout so a change in `bd list`'s human-readable TUI
+# format cannot silently flip the extraction result. install.sh and
+# ralph.sh both use this path (via _ralph_bead_in_progress in ralph.sh
+# which wraps the same jq invocation) so the two cannot disagree about
+# what "there is an in-progress bead" means.
+bd_bead_in_progress() {
+  command -v bd >/dev/null 2>&1 || {
+    # No bd installed: treat as no-bead (Phase 1 bootstrap). This is the
+    # only "empty but OK" path for the hook chain.
+    return 0
+  }
+  local raw
+  if ! raw=$(bd list --status=in_progress --json 2>/dev/null); then
+    # bd exists but failed: do NOT silently pass. The caller should block.
+    echo "bd list --status=in_progress failed" >&2
+    return 1
+  fi
+  # Empty output from bd list --json when no beads match — treat as
+  # no-bead. `jq -e` returns non-zero for null/empty so we can't use it
+  # here; instead, validate that the output parses as JSON and extract.
+  if [ -z "$raw" ]; then
+    return 0
+  fi
+  local id
+  if ! id=$(jq -r '.[0].id // empty' <<<"$raw" 2>/dev/null); then
+    echo "bd list produced non-parseable JSON" >&2
+    return 1
+  fi
+  printf '%s' "$id"
+  return 0
+}
+
 # fm_status_check <register-path>
 fm_status_check() {
   local fm_register="$1"
@@ -148,11 +195,6 @@ dec_file_refs_check() {
 }
 
 # Starter rubric constants — used by rubric_edit_check.
-# These are the universal starter values that ship in docs/skills/review-rubric.md
-# before any project customizes it. The Phase 1 contract is that a project
-# (a) replaces the disclaimer, (b) renames the H1 header from the starter, and
-# (c) adds at least one clause not in the starter allowlist. The Initializer
-# Template's own customization is `P1.hook-bypass` plus the project-named header.
 RUBRIC_STARTER_DISCLAIMER="This file is a starter rubric"
 RUBRIC_STARTER_HEADER="# Review Severity Rubric"
 RUBRIC_STARTER_CLAUSES=(
@@ -180,12 +222,6 @@ RUBRIC_STARTER_CLAUSES=(
 )
 
 # rubric_edit_check <rubric-path>
-# Returns 0 when the rubric has been customized beyond the shipped starter:
-#   - the starter disclaimer phrase is gone,
-#   - the first H1 header differs from RUBRIC_STARTER_HEADER verbatim, and
-#   - at least one clause exists, with at least one not in RUBRIC_STARTER_CLAUSES.
-# Returns 1 otherwise, printing the specific failing reason to stdout. A missing
-# rubric file returns 0 (the install.sh guard already conditions on existence).
 rubric_edit_check() {
   local rubric="$1"
   [ -f "$rubric" ] || return 0
@@ -234,11 +270,6 @@ rubric_edit_check() {
 }
 
 # rubric_clauses_extract <rubric-path>
-# Prints the canonical clause names defined by the rubric (one per line, sorted
-# unique). A clause is recognized only when it appears as a bold-marker definition
-# (`**P[123].name**`); plain mentions in prose or code fences are ignored, so a
-# rubric is the single source of truth for which clauses exist. A missing rubric
-# returns 0 with empty output (callers decide how to handle).
 rubric_clauses_extract() {
   local rubric="$1"
   [ -f "$rubric" ] || return 0
@@ -248,12 +279,6 @@ rubric_clauses_extract() {
 }
 
 # review_artifact_clauses_check <artifact-path> <rubric-path>
-# Returns 0 if every clause cited in the artifact (any token matching the
-# `P[123].name` shape) is a clause defined in the rubric. Returns 1 with the
-# offending clause names on stdout if any cited clause is not in the rubric, or
-# if the rubric defines no clauses at all (which would make every citation
-# vacuously invalid). This closes the Goodhart hole where the validator only
-# checked clause-shape, not membership.
 review_artifact_clauses_check() {
   local artifact="$1"
   local rubric="$2"
@@ -285,11 +310,6 @@ review_artifact_clauses_check() {
 }
 
 # gate_command_extract <claude-md-path>
-# Prints the verification gate command declared in CLAUDE.md as the first fenced
-# code block directly under the "## Verification Gate" heading. Single source of
-# truth for the extractor so the pre-push hook (scripts/hooks/install.sh) and
-# the gate regression suite (tests/hooks/gate.bats) cannot drift from each other.
-# Returns 0 always; callers check for empty output (no gate found).
 gate_command_extract() {
   local claude_md="$1"
   [ -f "$claude_md" ] || return 0
@@ -299,6 +319,30 @@ gate_command_extract() {
     in_section && /^```/ { in_fence = !in_fence; next }
     in_section && in_fence { print }
   ' "$claude_md"
+}
+
+# gate_has_soft_fail_escape <gate-command-string>
+#
+# Returns 0 if the command contains a trailing soft-fail escape
+# (`|| true`, `|| :`, `|| 0`, `|| exit 0`). Returns 1 otherwise.
+# Extracted from gate.bats so the same check is available to callers
+# that want to pre-validate a proposed gate without a bats suite.
+#
+# The failure-mode register used to name this bug class "`|| true`" — the
+# broader name is "soft-fail escape in a correctness chain" because the
+# same structural hole covers `|| :`, `|| 0`, `|| exit 0`, and the bash
+# precedence rule that binds the trailer to the whole && chain.
+gate_has_soft_fail_escape() {
+  local gate_cmd="$1"
+  # Strip trailing whitespace via bash parameter expansion (avoids SC2001).
+  local trimmed="$gate_cmd"
+  while [[ "$trimmed" == *[[:space:]] ]]; do
+    trimmed="${trimmed%?}"
+  done
+  if [[ "$trimmed" =~ \|\|[[:space:]]*(true|:|0|exit[[:space:]]+0)[[:space:]]*$ ]]; then
+    return 0
+  fi
+  return 1
 }
 
 # claude_model_tags_check <claude-md-path>
@@ -339,6 +383,70 @@ claude_model_tags_check() {
 
   if [ -n "$bad" ]; then
     printf '%s\n' "$bad"
+    return 1
+  fi
+  return 0
+}
+
+# archive_schema_check <archive-path> <confidence-log-path>
+#
+# For every BEAD_DONE entry in confidence.log that names a real bead
+# (bead=<id>, not bead=unknown), there must be a matching archive.txt
+# block of the form:
+#   ## <date-prefix> - <bead-id>
+# where <date-prefix> is a YYYY-MM-DD or YYYY-MM-DD HH:MM prefix.
+#
+# Enforces the prompt.md contract that every successful iteration appends
+# a progress entry to archive.txt. Without a mechanical check, archive.txt
+# was a proxy for "agent followed the contract" — the prompt said to write
+# it, but nothing read it. This check closes that proxy.
+#
+# Phase 1 bootstrap: if confidence.log is absent, returns 0 (no BEAD_DONEs
+# yet to match). If every BEAD_DONE has bead=unknown (the old pre-fix
+# state), returns 0 with a stderr note so the Issue is visible but the
+# gate does not block — this lets old logs be retired without a full
+# archive rewrite.
+archive_schema_check() {
+  local archive="$1"
+  local conflog="$2"
+
+  # No confidence.log: nothing to validate against.
+  [ -f "$conflog" ] || return 0
+  # No archive.txt: anything that should be there is missing.
+  [ -f "$archive" ] || {
+    # If confidence.log has no BEAD_DONEs either, Phase 1 bootstrap: pass.
+    if ! grep -q 'bead_done=true' "$conflog"; then
+      return 0
+    fi
+    echo "archive.txt is missing but confidence.log records BEAD_DONE iterations"
+    return 1
+  }
+
+  local missing=""
+  local bead_ids
+  # Pull all bead_done=true lines with a real bead id (not "unknown"), one
+  # id per line, deduplicated.
+  bead_ids=$(grep 'bead_done=true' "$conflog" \
+    | grep -oE 'bead=[^ ]+' \
+    | sed 's/^bead=//' \
+    | grep -v '^unknown$' \
+    | sort -u) || true
+
+  [ -z "$bead_ids" ] && return 0
+
+  local id
+  while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    # archive.txt block header: "## <date-prefix> - <id>"
+    # Require the id at end of line (after " - ") to avoid substring matches.
+    if ! grep -qE "^## [0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]][0-9]{2}:[0-9]{2})? - $id$" "$archive"; then
+      missing="${missing}${missing:+
+}    $id"
+    fi
+  done <<< "$bead_ids"
+
+  if [ -n "$missing" ]; then
+    printf 'archive.txt missing entry for BEAD_DONE iterations:\n%s\n' "$missing"
     return 1
   fi
   return 0
