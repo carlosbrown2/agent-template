@@ -24,8 +24,17 @@ jobs:
       - name: Install bd (Beads CLI)
         run: |
           # CI pin: bd >= 0.3.0 (matches CLAUDE.md § Pinned Tool Versions).
-          # npm install is the supported cross-platform path.
-          npm install -g @beads/bd
+          # Use the upstream install script — it handles platform detection,
+          # GitHub-release download, and checksum verification. The npm
+          # package's postinstall does not reliably pull the linux-x64
+          # binary on GitHub Actions runners.
+          curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+          # install.sh typically drops bd in ~/.local/bin or /usr/local/bin;
+          # make both visible to subsequent steps.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          # Sanity-check the binary is actually callable in *this* step too.
+          export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
           bd --version
 
       - name: Show tool versions
@@ -58,14 +67,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DavidAnson/markdownlint-cli2-action@v16
         with:
+          # Config lives in .markdownlint.jsonc at the repo root so editor
+          # integrations and CI read the same rules. The env-var form is
+          # not honored by markdownlint-cli2 — config must come from a file.
+          config: .markdownlint.jsonc
           globs: |
             **/*.md
             !**/node_modules
-        env:
-          MARKDOWNLINT_CLI2_CONFIG: |
-            {
-              "default": true,
-              "MD013": false,
-              "MD033": false,
-              "MD041": false
-            }
+            !.beads/**
