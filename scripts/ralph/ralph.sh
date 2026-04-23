@@ -119,10 +119,9 @@ _RALPH_ARCHIVE_FILE="$_RALPH_SCRIPT_DIR/archive.txt"
 _RALPH_CONFIDENCE_LOG="$_RALPH_SCRIPT_DIR/confidence.log"
 _RALPH_RETRY_STATE_FILE="$_RALPH_SCRIPT_DIR/retry_state.json"
 
-# Source routing functions (parse_confidence, parse_confidence_bead_done,
-# read_auto_land_policy, should_auto_land, compute_retry_state,
-# extract_prereq_bead_id, run_gate) so tests/hooks/ralph.bats exercises
-# the same definitions the loop uses.
+# Source routing functions (compute_confidence, read_auto_land_policy,
+# should_auto_land, compute_retry_state, extract_prereq_bead_id, run_gate)
+# so tests/hooks/ralph.bats exercises the same definitions the loop uses.
 _RALPH_LIB="$_RALPH_SCRIPT_DIR/lib.sh"
 if [ ! -f "$_RALPH_LIB" ]; then
   echo "Error: scripts/ralph/lib.sh not found at $_RALPH_LIB"

@@ -79,7 +79,7 @@ Review verdicts are only as strong as the probing that produced them. A review b
 - A regex that checks the *shape* of a string — does the check also verify *membership* in a canonical set? (e.g., `P[123]\.[a-z-]+` matches any well-formed token, not only clauses defined in the rubric.)
 - A literal-phrase `grep` (e.g., a check that only looks for the starter-rubric disclaimer sentence by exact substring) — does a trivial rewrite that keeps the Goodhart-able content but removes the phrase pass the check?
 - A glob or literal match for one syntactic variant of a bug class (`|| true`) — is the check as broad as the failure-mode row claims (all of `|| true`, `|| :`, `|| 0`, `|| exit 0`)?
-- A self-report signal (`<gate-result>`, `<confidence>`) — is there a matching observer that catches divergence, or only the self-report?
+- A self-report signal (an `archive.txt` entry the agent claims to have appended, a `<blocked-reason>` / `<rework-reason>` the agent writes as justification) — is there a matching observer that catches divergence, or only the self-report? Contrast: `archive_schema_check` observes the archive-entry claim by cross-referencing `confidence.log`, so "agent wrote a progress block" is bounded, not a proxy; no hook currently observes blocked-reason text, so the claim is effectively unverified rationale.
 
 ### Verified-failure-scenario beats "I read the code carefully"
 

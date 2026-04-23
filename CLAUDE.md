@@ -5,7 +5,7 @@ This is the **initializer template** itself. The project under development is th
 ## Architecture
 
 - `project-kickoff-prompt.md` — the phase-by-phase outcome contract for any project bootstrapped from this template.
-- `scripts/ralph/ralph.sh` — the long-running agent loop. Picks a ready bead, runs the agent, parses `<gate-result>`/`<confidence>` tags, auto-lands if policy allows.
+- `scripts/ralph/ralph.sh` — the long-running agent loop. Picks a ready bead, runs the agent, re-runs the verification gate in bash on BEAD_DONE, derives confidence from observed signals (gate result, diff size, touched hooks/CLAUDE.md, retry count), auto-lands if policy allows.
 - `scripts/ralph/prompt.md` — the per-iteration system prompt the loop feeds the agent.
 - `scripts/hooks/install.sh` — installs the pre-commit chain (bead-type gate, scope enforcement, register integrity, review artifact validator, model-tag validator, CLAUDE.md size guard, commit-message format).
 - `docs/failure-modes.md` and `docs/decision-register.md` — the two registers that every register-integrity hook parses.
@@ -34,8 +34,8 @@ Every clause must exit non-zero on real failure with no **soft-fail escape in a 
 
 The gate is enforced at **two points**, and both must agree before a push reaches the remote:
 
-1. **During the bead (soft):** the agent runs the gate and self-reports via `<gate-result>PASS|FAIL</gate-result>`. `scripts/ralph/ralph.sh` parses the tag and persists it to `.last-gate-result` (gitignored) so downstream tools can compare.
-2. **On `git push` (hard):** the pre-push hook installed by `scripts/hooks/install.sh` extracts this gate command, re-runs it, and blocks the push if the real exit code is non-zero. If `.last-gate-result` says PASS but the re-run fails, the block message calls out the divergence explicitly.
+1. **During the bead:** `scripts/ralph/ralph.sh` runs the gate itself on BEAD_DONE via `scripts/ralph/lib.sh` `run_gate` (which sources the gate command from this file through `scripts/hooks/parsers.sh` `gate_command_extract`) and writes the real exit code (PASS/FAIL/SKIPPED) to `.last-gate-result` (gitignored). The agent emits no gate tag — a self-reported tag would be a prediction of the gate, not a measurement of it, and the pre-push hook existed largely to catch that exact bypass.
+2. **On `git push`:** the pre-push hook installed by `scripts/hooks/install.sh` extracts this gate command, re-runs it, and blocks the push if the real exit code is non-zero. If `.last-gate-result` disagrees with the push-time re-run, the block message calls out the divergence — now meaning "tree or env changed between iteration and push" (an uncommitted edit, a flaky test, a version drift) rather than "agent lied about the gate."
 
 ## Invariants
 

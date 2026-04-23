@@ -547,10 +547,13 @@ if [ "$OBSERVED" = "FAIL" ]; then
   echo ""
   echo "BLOCKED: verification gate failed on pre-push (observed=FAIL)."
   if [ "$SELF_REPORT" = "PASS" ]; then
-    echo "  DIVERGENCE: agent self-reported PASS but the real gate fails."
-    echo "  This is the exact bypass the pre-push hook exists to catch."
+    echo "  DIVERGENCE: .last-gate-result says PASS but the push-time re-run fails."
+    echo "  The iteration-time gate (run by scripts/ralph/ralph.sh via lib.sh run_gate)"
+    echo "  passed; something changed between then and now. Likely causes: an uncommitted"
+    echo "  edit, tree edits after the bead closed, environment drift, test flakiness,"
+    echo "  a file present locally but not committed."
   elif [ -n "$SELF_REPORT" ]; then
-    echo "  Agent self-reported: $SELF_REPORT"
+    echo "  Iteration-time gate result: $SELF_REPORT"
   fi
   echo "  Fix the failing check (or the gate itself). Never bypass with --no-verify."
   exit 1
@@ -558,9 +561,11 @@ fi
 
 if [ "$SELF_REPORT" = "FAIL" ]; then
   echo ""
-  echo "BLOCKED: observed=PASS but agent self-reported FAIL."
-  echo "  Investigate the divergence before pushing (stale state file, environment drift,"
-  echo "  or the gate command is insensitive to the failure the agent saw)."
+  echo "BLOCKED: observed=PASS but .last-gate-result says FAIL."
+  echo "  The iteration-time gate failed but push-time passed. Investigate the divergence"
+  echo "  before pushing (stale .last-gate-result, tree changed between bead close and"
+  echo "  push, or the gate command is insensitive to the failure the iteration-time run"
+  echo "  saw — add a clause that catches it)."
   exit 1
 fi
 
