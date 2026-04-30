@@ -1,0 +1,40 @@
+# tests/hooks/fixtures/confidence.log.sample
+#
+# Representative iter shapes replayed by tests/hooks/pause_rate_budget.bats
+# through compute_confidence to assert the auto_land=false rate stays at or
+# below a pinned baseline. The fixture is part of the contract per
+# cross-cutting invariant #1 in docs/upstream-harness-improvements.md.
+#
+# Format (pipe-separated, comments and blank lines skipped):
+#   name|gate_result|diff_lines|touched_hooks|touched_claude_md|retry_count
+#
+# Coverage rationale:
+#   - Happy paths exercise the HIGH branch under representative diff sizes
+#     up to and including the 500-line threshold edge.
+#   - One iter per single downgrade axis pins the axis as a downgrade
+#     trigger (catches accidental retirement).
+#   - Threshold-edge iters (500 stays HIGH, 501 downgrades) bracket the
+#     diff_lines cut so a `>` vs `>=` flip surfaces here.
+#   - Two-axis combinations exercise the LOW collapse so the floor is
+#     visible to the rate calculation.
+#
+# Why a fixed fixture: a threshold-tightening change (e.g., diff>500 →
+# diff>200) silently pushes recorded iters into downgrade and ramps the
+# auto_land=false rate. The fixture is the bind — its rate is the budget
+# any future axis change must stay within (or pay for with a retirement /
+# threshold-raise documented in the back-port doc).
+clean-small|PASS|100|false|false|0
+clean-100|PASS|100|false|false|0
+clean-200|PASS|200|false|false|0
+clean-300|PASS|300|false|false|0
+clean-400|PASS|400|false|false|0
+clean-edge-500|PASS|500|false|false|0
+clean-450|PASS|450|false|false|0
+clean-50|PASS|50|false|false|0
+gate-fail|FAIL|100|false|false|0
+big-diff-edge-501|PASS|501|false|false|0
+big-diff-1000|PASS|1000|false|false|0
+touched-hooks|PASS|100|true|false|0
+touched-claude-md|PASS|100|false|true|0
+retry-once|PASS|100|false|false|1
+two-axes-diff-hooks|PASS|1000|true|false|0
