@@ -91,10 +91,17 @@ run_gate() {
 #     touched_claude_md == "true"
 #   0 downgrades → HIGH; 1 → MEDIUM; 2+ → LOW.
 #
-# The 500-line threshold is a heuristic baseline — calibrate against this
-# repo's commit-size distribution in a follow-up bead if logs show signal
-# clustering on one side of the cut. The axes are kept narrow on purpose;
-# new downgrade axes should earn a bats test that covers them in isolation.
+# The 500-line threshold is a heuristic baseline, not a contract: it
+# represents "enough surface area that a quiet regression could hide" for
+# the template's own bead-size distribution. Downstream projects bootstrapped
+# from this template are responsible for calibrating the threshold against
+# their own commit-size distribution — recorded confidence.log iters with
+# bead_done=true are the input. If signal clusters on one side of the cut
+# (e.g., most BEAD_DONE iters cross 500 lines for legitimate reasons, so the
+# axis fires on normal cadence rather than real risk), raise the value in a
+# follow-up bead; pair the change with a bracket test update so the new cut
+# point is pinned on both sides. The axes are kept narrow on purpose; new
+# downgrade axes should earn a bats test that covers them in isolation.
 compute_confidence() {
   local gate_result="$1"
   local diff_lines="${2:-0}"

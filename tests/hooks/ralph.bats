@@ -100,6 +100,18 @@ teardown() {
   [ "$output" = "HIGH" ]
 }
 
+@test "compute_confidence: PASS + diff just above threshold (501) downgrades to MEDIUM" {
+  # Tight bracket on the just-above side: paired with the 500→HIGH test
+  # above, this pins the cut point from both sides. A future `>` vs `>=`
+  # flip would silently shift the boundary by one line; with both 500 and
+  # 501 pinned, exactly one of the two tests fails on a flip and the
+  # diagnostic points at the operator. The wider 1000→MEDIUM test still
+  # asserts "well above the cut downgrades" but cannot catch an off-by-one.
+  run compute_confidence "PASS" 501 "false" "false" 0
+  [ "$status" -eq 0 ]
+  [ "$output" = "MEDIUM" ]
+}
+
 @test "compute_confidence: PASS + touched scripts/hooks/ downgrades to MEDIUM" {
   # Changing the enforcement mechanism is higher-risk than changing code
   # that the enforcement mechanism judges. The downgrade enforces "the
