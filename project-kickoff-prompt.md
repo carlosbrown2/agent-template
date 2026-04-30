@@ -139,7 +139,7 @@ Done when every bead is closed and **all** of the following hold for every commi
 - The commit's diff is within the bead's declared scope (enforced by the scope hook).
 - A confidence signal was emitted.
 
-The Ralph loop's hard rule still holds: **one bead per fresh agent session, then stop**. This is itself a decision-register entry: it bounds "context drift" by structurally preventing it. Memory persists through git — the registers, `CLAUDE.md`, `docs/skills/`, `scripts/ralph/patterns.md` — not through conversation history. (`scripts/ralph/archive.txt` is a per-run log, not persisted memory: it is gitignored.)
+The Ralph loop's hard rule still holds: **one bead per fresh agent session, then stop**. This is itself a decision-register entry: it bounds "context drift" by structurally preventing it. Memory persists through git — the registers, `CLAUDE.md`, `docs/skills/` — not through conversation history. (`scripts/ralph/archive.txt` is a per-run log, not persisted memory: it is gitignored.)
 
 Beyond that hard rule, the per-iteration prompt should describe outcomes, not steps. The agent decides how to orient, how to search, how to validate. It must produce: a closed bead, a green gate, updated registers, and a confidence signal.
 

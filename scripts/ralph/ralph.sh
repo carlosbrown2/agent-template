@@ -16,7 +16,7 @@ _ralph_cleanup() {
   unset _RALPH_HAD_NOUNSET
   unset _RALPH_TOOL _RALPH_MAX_ITERATIONS
   unset _RALPH_SCRIPT_DIR _RALPH_PROJECT_ROOT
-  unset _RALPH_PROMPT_FILE _RALPH_PATTERNS_FILE _RALPH_ARCHIVE_FILE
+  unset _RALPH_PROMPT_FILE _RALPH_ARCHIVE_FILE
   unset _RALPH_CONFIDENCE_LOG _RALPH_RETRY_STATE_FILE _RALPH_LIB
   unset _RALPH_PARSERS _RALPH_GATE_CMD
   unset _RALPH_FAIL_COUNT _RALPH_LAST_FAILED_BEAD _RALPH_MAX_RETRIES
@@ -187,7 +187,6 @@ fi
 _RALPH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 _RALPH_PROJECT_ROOT="$(cd "$_RALPH_SCRIPT_DIR/../.." && pwd)"
 _RALPH_PROMPT_FILE="$_RALPH_SCRIPT_DIR/prompt.md"
-_RALPH_PATTERNS_FILE="$_RALPH_SCRIPT_DIR/patterns.md"
 _RALPH_ARCHIVE_FILE="$_RALPH_SCRIPT_DIR/archive.txt"
 _RALPH_CONFIDENCE_LOG="$_RALPH_SCRIPT_DIR/confidence.log"
 _RALPH_RETRY_STATE_FILE="$_RALPH_SCRIPT_DIR/retry_state.json"
@@ -230,11 +229,6 @@ fi
 _RALPH_FAIL_COUNT=0
 _RALPH_LAST_FAILED_BEAD=""
 _RALPH_MAX_RETRIES=3
-
-# Initialize patterns file if it doesn't exist
-if [ ! -f "$_RALPH_PATTERNS_FILE" ]; then
-  echo "## Codebase Patterns" > "$_RALPH_PATTERNS_FILE"
-fi
 
 # Initialize archive file if it doesn't exist
 if [ ! -f "$_RALPH_ARCHIVE_FILE" ]; then

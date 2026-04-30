@@ -194,7 +194,6 @@ INFRA_PATHS=(
   "docs/decision-register.md"
   "docs/reviews/"
   "scripts/ralph/archive.txt"
-  "scripts/ralph/patterns.md"
   "scripts/ralph/retry_state.json"
   ".current-bead-type"
   ".current-bead-scope"

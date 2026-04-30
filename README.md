@@ -99,7 +99,6 @@ scripts/
     ralph.sh                # The Ralph loop — runs agents one bead at a time
     lib.sh                  # Pure routing functions (parse_confidence, auto-land, retry state)
     prompt.md               # Per-iteration outcome contract for each agent session
-    patterns.md             # Codebase patterns discovered during implementation
   hooks/
     install.sh              # Pre-commit hook installer (9 hooks — see Configuration)
     parsers.sh              # Register parser library sourced by both hooks and bats tests

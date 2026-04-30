@@ -27,13 +27,13 @@ These are the states that must hold before you exit. Sequence the work however y
 
 - **A bead has been claimed or resumed.** If `bd ready` returns nothing, emit `<promise>COMPLETE</promise>` and stop instead.
 - **`.current-bead-type` exists** and contains exactly one of `impl|review|pare|compound|research`. The pre-commit gate is fail-closed: if you try to commit while a bead is in progress and this marker is missing or invalid, you will be blocked.
-- **For `impl`, `pare`, and `compound` beads, `.current-bead-scope` exists** and lists the in-scope file paths (one per line). The scope hook rejects commits that touch anything outside this list, except for infrastructure paths (the registers, the archive, the patterns file, the bead-marker files; plus `CLAUDE.md`, `docs/skills/`, and `tests/regression/` for compound beads).
+- **For `impl`, `pare`, and `compound` beads, `.current-bead-scope` exists** and lists the in-scope file paths (one per line). The scope hook rejects commits that touch anything outside this list, except for infrastructure paths (the registers, the archive, the bead-marker files; plus `CLAUDE.md`, `docs/skills/`, and `tests/regression/` for compound beads).
 - **If this is a retry** (`scripts/ralph/retry_state.json` shows `fail_count > 0` for this bead), the prior attempt has been diagnosed in `scripts/ralph/archive.txt` and the new approach is *meaningfully different* from the old one. On the third attempt, the strategy is fundamentally different or you have escalated via `BLOCKED`.
 - **The bead's type-specific work is complete** (see the bead-type contracts below).
 - **The failure-mode register has been updated** for any new failure mode this bead introduced. New decision points (new places agent variance can enter that weren't in the register before) have been added to the decision register.
 - **The verification gate has been run** and is green. No tag emission is required — `ralph.sh` re-runs the gate itself after you exit and writes the real result to `.last-gate-result`. If your own run shows FAIL, do not emit BEAD_DONE; fix the failure or emit `BLOCKED` / `REWORK_REQUIRED` with a reason.
 - **The bead is closed in beads** and beads state is persisted.
-- **`scripts/ralph/archive.txt` has a new progress entry** with the required `## YYYY-MM-DD HH:MM - <bead-id>` header (see Progress report format below). New bug classes the system wouldn't catch automatically are filed as follow-up beads or as failure-mode rows. Reusable patterns also go in `scripts/ralph/patterns.md`.
+- **`scripts/ralph/archive.txt` has a new progress entry** with the required `## YYYY-MM-DD HH:MM - <bead-id>` header (see Progress report format below). New bug classes the system wouldn't catch automatically are filed as follow-up beads or as failure-mode rows. Reusable patterns are promoted to `CLAUDE.md` `## Discovered Patterns` by compound beads (see the compound-bead contract below).
 - **The marker files are absent** (`.current-bead-type` and `.current-bead-scope` removed).
 
 ## Bead-type contracts
@@ -128,7 +128,7 @@ APPEND to `scripts/ralph/archive.txt` (never replace existing content). The head
 ---
 ```
 
-The date+time (or date alone) and `<bead-id>` separated by ` - ` are required — `archive_schema_check` matches `^## [0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]][0-9]{2}:[0-9]{2})? - <bead-id>$`. A different header shape will still parse as prose but will fail the schema check on the next push. If you discover a reusable pattern, also add it to `scripts/ralph/patterns.md`.
+The date+time (or date alone) and `<bead-id>` separated by ` - ` are required — `archive_schema_check` matches `^## [0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]][0-9]{2}:[0-9]{2})? - <bead-id>$`. A different header shape will still parse as prose but will fail the schema check on the next push. Reusable patterns are promoted to `CLAUDE.md` `## Discovered Patterns` by compound beads.
 
 ## Stop
 
