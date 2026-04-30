@@ -339,3 +339,52 @@ existing scope did not cover.
 Bundling 4+5 into one bead is reasonable since both are docstring-only
 changes against the loop_saturation rename. Bundling 1+2+3 would over-scope
 a single review-followup bead — file each as its own.
+
+## Pare-down Notes
+
+### agent-template-79f — demote `governance_bead_max_age_days` to surfacing-only
+
+The ebh back-port shipped two halves of the same governance-staleness bind:
+the operator-visibility surfacing helper (`_ralph_surface_stale_governance`,
+prints `⚠ Stale governance:` above the iter banner at >3d) and the runtime
+override predicate (`governance_bead_max_age_days`, forces
+`_RALPH_CONFIDENCE=LOW` post-`compute_confidence` at >7d). The pare drops the
+runtime override, keeps the surfacing helper.
+
+Rationale: the surfacing alone is what changes the operator's next action —
+the warning above the banner is the load-bearing signal. The post-
+`compute_confidence` LOW override was belt-and-suspenders on a confidence
+verdict whose downstream effect is "pause for human review under the `high`
+auto-land policy"; the operator sees the warning *first*, so the override
+fires only on iters where the operator is already paused for the same reason.
+Removing it shrinks the public surface (one fewer lib helper, one fewer
+lib-to-loop coupling, two fewer integration tests against an `eval`-extracted
+ralph.sh block) without weakening the warning siren.
+
+What was kept (surfacing path):
+- `GOVERNANCE_TITLE_REGEX` and `BD_DATE_TO_EPOCH_JQ_DEF` in `scripts/ralph/lib.sh`,
+  now annotated `# shellcheck disable=SC2034` because the only consumer is
+  across a `source` boundary in `ralph.sh`.
+- `_ralph_surface_stale_governance` and its iter-top invocation.
+- The four surfacing-only bats tests (accept >3d matching, silent ≤3d
+  matching, silent >3d non-matching, silent on empty input).
+
+What was dropped:
+- `governance_bead_max_age_days` (lib.sh) and its post-`compute_confidence`
+  call site in `ralph.sh`.
+- Seven bats tests against the predicate (empty / empty-array benign,
+  Phase 3 impl: ignored, 7d / 8d bracket, multi-prefix matching,
+  oldest-of-multiple).
+- Two `eval`-extracted integration tests over the override block (force-LOW
+  truthy, leave-unchanged falsy).
+
+Failure-mode register row 30 ("scripts/ralph/ralph.sh stale governance bead
+routing") was narrowed in the same commit: dropped the (b) "confidence
+over-grading" failure shape, dropped the predicate clauses from the Check
+cell, and added a sentence noting the demotion in agent-template-79f so the
+register history is readable from the row itself.
+
+Net line count went down across the pare's three code/test files (lib.sh,
+ralph.sh, ralph.bats — `git diff --stat` reports ~−170 across them, +48 on
+the appended review artifact for these notes). Functionality is unchanged
+along the operator-visibility path; the runtime confidence override is gone.

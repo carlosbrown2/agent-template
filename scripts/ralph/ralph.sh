@@ -117,9 +117,8 @@ _ralph_sanitize_log_field() {
 
 # Surface stale (>3d) governance beads above the iter banner so the
 # operator sees the loop's own audit instructions before the agent claims
-# its next bead. Pure surfacing — the >7d hard force-LOW rule lives in
-# governance_bead_max_age_days (lib.sh). bd / jq failures silently no-op:
-# this is best-effort visibility, not a correctness gate.
+# its next bead. Best-effort visibility, not a correctness gate: bd / jq
+# failures silently no-op so a flaky bd call does not spam a header.
 _ralph_surface_stale_governance() {
   local json="$1"
   [[ -n "$json" ]] || return 0
@@ -510,12 +509,6 @@ RETRY_EOF
     _RALPH_CONFIDENCE=$(compute_confidence \
       "$_RALPH_GATE_RESULT" "$_RALPH_DIFF_LINES" "$_RALPH_TOUCHED_HOOKS" \
       "$_RALPH_TOUCHED_CLAUDE_MD")
-    # Force LOW when a governance bead has aged past the cut. Override
-    # post-compute_confidence (not as an axis) so the rest of the routing
-    # matrix still shows up in confidence.log for the audit trail.
-    if governance_bead_max_age_days "$_RALPH_GOVERNANCE_JSON"; then
-      _RALPH_CONFIDENCE="LOW"
-    fi
   fi
   # Build the optional `stale_head=true` field once so both log lines below
   # carry the same shape. Emitted only on stale-HEAD iters so a future audit
