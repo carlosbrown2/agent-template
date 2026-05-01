@@ -46,22 +46,12 @@ The gate is enforced at **two points**, and both must agree before a push reache
 - Bead id shape lives in exactly one place per library: `BEAD_ID_REGEX` in `scripts/ralph/lib.sh` and `PARSERS_BEAD_ID_REGEX` in `scripts/hooks/parsers.sh`. A bats smoke test in `tests/hooks/parsers.bats` asserts the two values are equal byte-for-byte. Never inline the regex at a call site — reference the constant.
 - `bd` CLI output is parsed only via `--json` + `jq`. Human-formatted output is not part of the bd contract and must not be a load-bearing parser input.
 - `archive.txt` is a machine-parsed artifact. Every `bead_done=true` entry in `confidence.log` with a real bead id must have a matching `## <date> - <bead-id>` block in `archive.txt` (checked by `archive_schema_check` in the gate). This keeps "agent wrote a progress entry" from being a proxy for "the entry is discoverable by future agents."
-- Harness growth is bounded along four dimensions (pause-rate, gate-clause count, confidence-axis count, file/function size). See `## Harness Surface Bounds` below.
 
 ## Confidence Routing
 
 The template itself ships `auto-land: high` as the safer default for every project bootstrapped from it. This template repo runs `auto-land: all` only because the gate is fully fleshed out and the human (you) is the only principal. Downstream projects should keep `high` until their gate is similarly strong.
 
 auto-land: all
-
-## Harness Surface Bounds
-
-The harness (`scripts/ralph/`, `scripts/hooks/`, `tests/hooks/`) is capped along four dimensions. A change that violates any earns explicit justification in the bead's notes, and the dimension being violated is the lens that focuses the justification.
-
-1. **Pause-rate ceiling.** Aggregate `auto_land=false` rate across `scripts/ralph/confidence.log` stays at or below baseline. New `compute_confidence` downgrade sources or pause surfaces ship paired with a retirement or threshold-raise elsewhere — the rate is the bind, not any single axis. Bound by `tests/hooks/pause_rate_budget.bats`.
-2. **Gate-clause count is fixed.** New harness checks land as functions in `scripts/hooks/parsers.sh`, wire into `scripts/hooks/install.sh`, and ride the existing `bats tests/hooks/` gate clause — gate-string length unchanged. A new top-level gate clause earns a separate justification naming the contract the existing clauses cannot absorb. Bound by `tests/hooks/gate_clause_count.bats`.
-3. **Confidence-axis budget: one in, one out.** `compute_confidence` accepts a fixed number of axes. Adding one without retiring one bloats the function and dilutes per-axis signal-to-noise. A future maintainer should hold every axis in working memory and know what real-risk class it catches. Bound by `tests/hooks/compute_confidence_arity.bats`.
-4. **Per-file and per-function line caps.** Harness shell files have line caps; no single function exceeds the cap that lets a maintainer hold it in memory. Cap-fail at commit triggers a `harness-pare:` bead whose DoD lists each function in the over-budget file, names its binding test or contract, classifies ritual vs. load-bearing, and pares ritual until under budget. Bound by `tests/hooks/budgets.bats`.
 
 ## Discovered Patterns
 
