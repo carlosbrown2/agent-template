@@ -4,6 +4,8 @@ These are constraints inherited from the initializer template. They are not patt
 
 A project may add its own discovered patterns under `CLAUDE.md` `## Discovered Patterns`. The entries below stay here so CLAUDE.md does not carry inherited prose that future model upgrades would need to re-validate alongside genuinely project-specific patterns.
 
+**Enforcement.** This file is intentionally prose-only — the patterns below are stable inheritance rather than active discovery, so the citation discipline (`model:` tag + binding artifact) is held by author convention rather than a hook. Extending `claude_model_tags_check` and `pattern_citation_check` to scan this file would add a hook-side cost (a new pre-commit branch and the bats coverage that pins it) for a low-volume, low-churn artifact, and would chip at the "Gate-clause count is fixed" invariant in `CLAUDE.md` `## Harness Surface Bounds` without a proportionate failure class to bind. New entries here arrive only via template-author work; the enforcement that matters runs against `CLAUDE.md` `## Discovered Patterns` where downstream projects actually add patterns.
+
 ## Inherited patterns
 
 ### Bind checks to the property, not a proxy for it

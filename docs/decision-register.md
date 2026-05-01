@@ -20,8 +20,12 @@ Every place agent variance can enter this project must appear here, paired with 
 | Verification truth | every "done" claim | one command from CLAUDE.md, not agent judgment | scripts/ralph/ralph.sh runs the gate itself via scripts/ralph/lib.sh run_gate on BEAD_DONE and writes the real exit code to .last-gate-result (sourcing scripts/hooks/parsers.sh gate_command_extract); pre-push hook from scripts/hooks/install.sh re-runs the gate command on git push as defense-in-depth and blocks on divergence | bounded |
 | Architectural choice | new subsystem design | escalate to human; agent does not decide alone | `<promise>BLOCKED</promise>` with reason | escalation-only |
 
-<!-- Below: this template's own dogfooding rows. Downstream projects bootstrapped from this template should review and likely delete these — the rows above are inherited starters. -->
+## Template-meta rows (downstream: prune)
 
+These rows bind this template's own harness internals (`scripts/ralph/`, `scripts/hooks/`, `tests/hooks/`) and are not relevant to downstream feature work. A fresh repo bootstrapped from this template should review and likely delete them. The integrity hook walks every `^|` row in the file regardless of section, so the schema (single-line, ≥5 columns, valid Status in the last cell) holds across both tables.
+
+| Decision point | Where it occurs | Bounding mechanism | Enforcement | Status |
+|----------------|-----------------|--------------------|-------------|--------|
 | Harness surface growth | every commit that grows scripts/ralph/ or scripts/hooks/ shell files | per-file line caps (ralph.sh ≤ 600, lib.sh ≤ 400, parsers.sh ≤ 600, install.sh ≤ 700) and a single per-function size cap (≤ 60 lines, awk that walks `name() {` ... matching column-0 `}` blocks across all four files); cap-fail at commit triggers a `harness-pare:` bead whose DoD lists every function in the over-budget file, names its binding test or contract, classifies ritual vs. load-bearing, pares ritual until under budget (or refactors a load-bearing function into smaller helpers), and otherwise raises the cap with documented justification in the bead's notes; cap-raises are diagnostic data — recurring raises across downstream projects are back-port signal to retighten the template defaults | tests/hooks/budgets.bats (absorbed by the existing `bats tests/hooks/` gate clause so gate-clause count is unchanged per CLAUDE.md `## Harness Surface Bounds` invariant #2) | bounded |
 
 ## Pending promotions
