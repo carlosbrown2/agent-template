@@ -364,7 +364,7 @@ EOF
   # re-run that ralph.sh does on BEAD_DONE to replace the prior
   # <gate-result> self-report. Uses `true` as a trivial passing gate so
   # the test cost is zero — the real gate has its own coverage in
-  # tests/hooks/gate.bats.
+  # tests/gate/gate.bats.
   result_file="$TMPDIR_TEST/.last-gate-result"
   run run_gate "true" "$result_file"
   [ "$status" -eq 0 ]

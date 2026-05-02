@@ -1,6 +1,10 @@
 #!/usr/bin/env bats
-# tests/hooks/gate.bats — regression tests for the verification gate command
+# tests/gate/gate.bats — regression tests for the verification gate command
 # declared under "## Verification Gate" in CLAUDE.md.
+#
+# Lives outside tests/hooks/ so the gate's `bats tests/hooks/` clause cannot
+# recursively re-enter the running gate. The gate string adds a separate
+# `bats tests/gate/` clause to keep this file's coverage in the chain.
 
 setup() {
   PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"

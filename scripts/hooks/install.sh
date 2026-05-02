@@ -408,7 +408,7 @@ if [ ! -f "$CLAUDE_MD" ]; then
   exit 0
 fi
 
-# Single-source the gate extractor so this hook and tests/hooks/gate.bats
+# Single-source the gate extractor so this hook and tests/gate/gate.bats
 # cannot drift. See gate_command_extract in scripts/hooks/parsers.sh.
 PARSERS_LIB="$PROJECT_ROOT/scripts/hooks/parsers.sh"
 if [ ! -f "$PARSERS_LIB" ]; then

@@ -112,7 +112,8 @@ docs/
   reviews/                  # Review/research artifacts (created/deleted during triads)
 tasks/                      # PRDs live here
 tests/
-  hooks/                    # bats suite covering parsers, gate, ralph routing, and harness-surface invariants (per-file/per-function line budgets, gate-clause count, confidence-axis arity, pause-rate ceiling)
+  hooks/                    # bats suite covering parsers and ralph routing
+  gate/                     # bats suite for the verification gate itself (lives outside tests/hooks/ so the gate's self-test cannot recurse into the running gate)
   regression/               # Regression tests from bugs found during the project
 ```
 

@@ -25,7 +25,7 @@ This is the **initializer template** itself. The project under development is th
 ## Verification Gate
 
 ```
-bash -n scripts/ralph/ralph.sh && bash -n scripts/ralph/lib.sh && bash -n scripts/hooks/install.sh && bash -n scripts/hooks/parsers.sh && shellcheck -x scripts/ralph/ralph.sh scripts/ralph/lib.sh scripts/hooks/install.sh scripts/hooks/parsers.sh && bd --version 2>/dev/null | grep -qE '^bd version ([1-9]|0\.([3-9]|[1-9][0-9]))' && bats tests/hooks/
+bash -n scripts/ralph/ralph.sh && bash -n scripts/ralph/lib.sh && bash -n scripts/hooks/install.sh && bash -n scripts/hooks/parsers.sh && shellcheck -x scripts/ralph/ralph.sh scripts/ralph/lib.sh scripts/hooks/install.sh scripts/hooks/parsers.sh && bd --version 2>/dev/null | grep -qE '^bd version ([1-9]|0\.([3-9]|[1-9][0-9]))' && bats tests/hooks/ && bats tests/gate/
 ```
 
 The gate parse-checks every shell script the pre-commit chain depends on (`parsers.sh` is sourced by the generated hook at runtime, so a syntax error there silently breaks register integrity), runs `shellcheck -x` across the full bash surface to catch quoting / subshell / word-split bugs that `bash -n` misses, verifies the `bd` CLI version against the pinned floor so a downstream-CLI format change surfaces as a gate failure rather than a silent hook no-op, and runs the full bats suite under `tests/hooks/` so parser and gate regressions surface mechanically.

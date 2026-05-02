@@ -8,9 +8,9 @@ on:
 jobs:
   # The verification gate is the merge contract. Running it in CI means a PR
   # that breaks ralph.bats / parsers.bats / gate.bats is caught before merge,
-  # not after. The gate itself invokes `bats tests/hooks/` — the recursion
-  # hazard with gate.bats's "gate passes against the current repo" sanity
-  # test is handled by the _BATS_GATE_REENTRY sentinel (see gate.bats).
+  # not after. The gate invokes `bats tests/hooks/` and `bats tests/gate/`
+  # as separate clauses; gate.bats lives outside tests/hooks/ so the gate's
+  # own self-test cannot recursively re-enter the running gate.
   verification-gate:
     runs-on: ubuntu-latest
     steps:
@@ -53,7 +53,8 @@ jobs:
             && bash -n scripts/hooks/parsers.sh \
             && shellcheck -x scripts/ralph/ralph.sh scripts/ralph/lib.sh scripts/hooks/install.sh scripts/hooks/parsers.sh \
             && bd --version 2>/dev/null | grep -qE '^bd version ([1-9]|0\.([3-9]|[1-9][0-9]))' \
-            && bats tests/hooks/
+            && bats tests/hooks/ \
+            && bats tests/gate/
 
   # Markdown lint keeps prose drift out of load-bearing files (CLAUDE.md,
   # prompt.md, the registers). Relaxed config — line length and inline HTML
