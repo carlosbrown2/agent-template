@@ -2,11 +2,11 @@
 
 ## When to load
 
-Load this skill at the start of every **review** bead. Every finding in a review artifact (`docs/reviews/<bead-id>.md`) must cite a clause from this rubric. The pre-commit review-artifact validator rejects review files that don't reference this rubric.
+Load this skill at the start of every **review** bead. Every finding in a review artifact (`docs/reviews/<bead-id>.md`) must cite a clause from this rubric. This is a ritual contract enforced by the review-bead checklist in `scripts/ralph/prompt.md` and by the human reading the review artifact, not by a pre-commit hook (the review-artifact validator and rubric-edit guard were retired in agent-template-e5u under the harness-restraint principle).
 
 This rubric exists to **bound the "review verdict" decision point** in `docs/decision-register.md`. Without it, severity classification is the model's intuition — and two runs of the same review can produce different P1 sets. With it, severity is anchored to a checked-in standard, and the review's variance is funneled into the rubric's clauses.
 
-The Initializer Template uses this rubric for its own review beads, with one project-specific clause added (`P1.hook-bypass`) reflecting CLAUDE.md's "no hook is ever bypassed" invariant. Projects bootstrapped from this template should rename the header to a project-named one and add their own domain-specific clauses (security-critical projects may add new categories; data-science projects may emphasize statistical correctness, etc.). Whatever clauses you add, the contract is that **every finding in every review cites a specific clause by name**. The pre-commit rubric-edit guard rejects commits while the rubric still carries its original "starter" disclaimer.
+The Initializer Template uses this rubric for its own review beads, with one project-specific clause added (`P1.hook-bypass`) reflecting CLAUDE.md's "no hook is ever bypassed" invariant. Projects bootstrapped from this template should rename the header to a project-named one and add their own domain-specific clauses (security-critical projects may add new categories; data-science projects may emphasize statistical correctness, etc.). Whatever clauses you add, the contract is that **every finding in every review cites a specific clause by name**.
 
 ---
 
@@ -67,7 +67,7 @@ Each finding in `docs/reviews/<bead-id>.md` must include the clause name. Exampl
 **P3.docstring-drift** — `src/auth/login.py:10` docstring says "returns the user object" but the function returns a session token.
 ```
 
-The pre-commit review-artifact validator looks for clause citations of the form `P[123]\.[a-z-]+` and rejects review files that contain none. It additionally requires that every cited clause is defined as a `**P[123].name**` bullet above — citing a well-formed but undefined clause (e.g., `P1.totally-made-up-clause`) is rejected as a shape-vs-membership Goodhart.
+Each clause must be defined as a `**P[123].name**` bullet above — citing a well-formed but undefined clause (e.g., `P1.totally-made-up-clause`) is a shape-vs-membership Goodhart and the next reader will catch it. This used to be hook-enforced (review_artifact_clauses_check in scripts/hooks/parsers.sh) but was retired in agent-template-e5u under the harness-restraint principle; the binding now lives in the review-bead contract and the human read.
 
 ---
 
@@ -79,7 +79,7 @@ Review verdicts are only as strong as the probing that produced them. A review b
 - A regex that checks the *shape* of a string — does the check also verify *membership* in a canonical set? (e.g., `P[123]\.[a-z-]+` matches any well-formed token, not only clauses defined in the rubric.)
 - A literal-phrase `grep` (e.g., a check that only looks for the starter-rubric disclaimer sentence by exact substring) — does a trivial rewrite that keeps the Goodhart-able content but removes the phrase pass the check?
 - A glob or literal match for one syntactic variant of a bug class (`|| true`) — is the check as broad as the failure-mode row claims (all of `|| true`, `|| :`, `|| 0`, `|| exit 0`)?
-- A self-report signal (an `archive.txt` entry the agent claims to have appended, a `<blocked-reason>` / `<rework-reason>` the agent writes as justification) — is there a matching observer that catches divergence, or only the self-report? Contrast: `archive_schema_check` observes the archive-entry claim by cross-referencing `confidence.log`, so "agent wrote a progress block" is bounded, not a proxy; no hook currently observes blocked-reason text, so the claim is effectively unverified rationale.
+- A self-report signal (an `archive.txt` entry the agent claims to have appended, a `<blocked-reason>` / `<rework-reason>` the agent writes as justification) — is there a matching observer that catches divergence, or only the self-report? Most self-report signals in this harness are now ritual-bounded (the BEAD_DONE archive entry and the blocked-reason text are both read by the human reviewing the loop's progress, not by a hook); name the self-report and the observer in the review so a future review can probe whether the observer is still doing the work the row claims it does.
 
 ### Verified-failure-scenario beats "I read the code carefully"
 
@@ -91,13 +91,15 @@ rsync -a --exclude='.beads/bd.sock' --exclude='.git' "$PROJECT_ROOT/" /tmp/sandb
 cd /tmp/sandbox && git init -q && git add . && git commit -qm boot
 ./scripts/hooks/install.sh
 
-# Mock `bd` so the in-progress-bead-dependent hooks fire:
-printf '#!/bin/bash\necho "agent-template-fakeN IN_PROGRESS Title"\n' > /tmp/bin/bd
+# Mock `bd` so the in-progress-bead-dependent hooks fire. bd_bead_in_progress
+# (scripts/hooks/parsers.sh) calls `bd list --status=in_progress --json` and
+# extracts `.[0].id`, so the mock must emit a JSON array containing an object
+# with an `id` field whose value matches the bead-id regex
+# `[a-z][-a-z0-9]*-[a-z0-9]{2,}`. A non-JSON mock makes the function return
+# non-zero, which fail-closes the commit but for the wrong reason.
+mkdir -p /tmp/bin
+printf '#!/bin/bash\necho '"'"'[{"id":"agent-template-fakeN","status":"in_progress"}]'"'"'\n' > /tmp/bin/bd
 chmod +x /tmp/bin/bd; export PATH="/tmp/bin:$PATH"
-
-# The `bd list --status=in_progress` regex in the hook matches IDs of shape
-# [a-z_]*-[a-z0-9]*-[a-z0-9]* (three dash-separated segments) — the fake ID
-# must match or the hook will silently no-op and produce a false-negative pass.
 ```
 
 Stage the adversarial edit, attempt the commit (or whatever operation the mechanism protects), and record the exit code, the block message, and whether the attempt succeeded.
