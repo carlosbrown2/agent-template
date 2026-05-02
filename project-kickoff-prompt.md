@@ -6,6 +6,12 @@ There are no required steps in this document. There are required outcomes. A pha
 
 ---
 
+## What this template does not give you
+
+Structural enforcement is not a substitute for human review. The hooks, registers, and gates in this template are guard rails on agent variance — they fence the choice space, they don't certify the choice. A green verification gate is a *license to propose a merge*, not a guarantee that the change is correct. The hooks reject the obviously-wrong; correctness in the non-obvious case lives in the review and compound passes (and in your judgment when reading the diff). Treat the gates as one of several inputs. Where the bead's value is high or the change is subtle, expect to read the diff yourself before landing it.
+
+---
+
 ## The two registers
 
 These are the mechanical backbone of the project. They are the only places where exhaustiveness is enforced — everything else flows from them.
@@ -33,7 +39,7 @@ A live table. Every module, every function, every data flow that can fail must a
 
 **No row may be left blank, vague, or in `tested-manually` status.** If you cannot find a mechanical check for a row, you must either invent one, prove the failure mode impossible, or escalate.
 
-**The exhaustiveness contract**: before any new module is merged, you must write a *negative-space proof* in the register — a line that says "the failure modes for this module are exactly the rows above, and here is why no other class of failure exists." If you cannot make that argument, the module is not ready to merge.
+**The exhaustiveness contract**: the failure-mode register lists the failure modes that have come up so far, each bound to a mechanical check or a written impossibility argument. Completeness isn't certified at merge time — Phase 4 is the dedicated holistic pass that re-tests exhaustiveness adversarially against the full codebase. A row missing from the register isn't a hidden lie, it's a row the team hasn't yet thought of; Phase 4 is the pass that tries hardest to find them.
 
 A pre-commit hook (see *Structural enforcement* below) parses this file and rejects commits where:
 - any row has Status not in `{covered, proven-impossible, out-of-scope}`
@@ -134,7 +140,7 @@ Each story decomposes into the **quartet**: `impl → review → pare-down → c
 Done when every bead is closed and **all** of the following hold for every commit:
 
 - The verification gate is green.
-- The failure-mode register has been updated for any module the bead touched, with at least one new row per new failure mode and a negative-space proof if a new module was added.
+- The failure-mode register has been updated for any module the bead touched, with at least one new row per new failure mode introduced.
 - The decision register has been updated if a new decision point emerged.
 - The commit's diff is within the bead's declared scope (enforced by the scope hook).
 - A confidence signal was emitted.
@@ -178,17 +184,15 @@ If a rule matters, it must be enforced mechanically. Prose is for context; gates
 
 **Pre-commit hooks** (install via `./scripts/hooks/install.sh`):
 
-1. **Bead type fail-closed gate** — when a bead is in progress (per `bd list --status=in_progress`), `.current-bead-type` must exist and hold one of `impl|review|pare|compound|research`. Closes the "forget to write the marker → no enforcement" bypass that would otherwise let scope enforcement and write protection silently no-op.
-2. **Scope enforcement** — rejects commits that touch files outside `.current-bead-scope`. `impl`/`pare`/`compound` beads MUST have a scope file present. Always-allowed infrastructure paths (the registers, the archive, the patterns file, the bead-marker files; plus `CLAUDE.md`, `docs/skills/`, and `tests/regression/` for compound beads) are exempt.
+1. **Bead type fail-closed gate** — when a bead is in progress (per `bd list --status=in_progress`), `.current-bead-type` must exist and hold one of `impl|review|pare|compound|research`. Closes the "forget to write the marker → no enforcement" bypass that would otherwise let scope enforcement silently no-op.
+2. **Scope enforcement** — rejects commits that touch files outside `.current-bead-scope`. `impl`/`pare`/`compound` beads MUST have a scope file present. Always-allowed infrastructure paths (the registers, the archive, the bead-marker files; plus `CLAUDE.md`, `docs/skills/`, and `tests/regression/` for compound beads) are exempt.
 3. **Failure-mode register integrity** — rejects commits where any row in `docs/failure-modes.md` has a last cell that isn't exactly `covered|proven-impossible|out-of-scope`, or where a referenced check file does not exist on disk.
 4. **Decision register integrity** — rejects commits where `docs/decision-register.md` is missing baseline rows, contains a multi-line/malformed row, has a row whose last cell isn't an acceptable Status, or names a bounding-mechanism file that does not exist.
-5. **Review/research bead write-protection** — when `.current-bead-type` is `review` or `research`, only files under `docs/reviews/` may change.
-6. **Review artifact validator** — when `.current-bead-type=review`, files staged in `docs/reviews/` must cite `docs/skills/review-rubric.md` and contain at least one severity clause matching `P[123].<clause-name>`.
-7. **CLAUDE.md model-tag validator** — every `### ` entry under `## Discovered Patterns` in `CLAUDE.md` must contain an anchored `model:` line so it can be retired or re-validated on model upgrade.
-8. **CLAUDE.md size guard** — rejects commits that push `CLAUDE.md` past the line limit (default 200). Domain knowledge belongs in `docs/skills/`, not in the constitution.
-9. **Commit-message format** — `feat|fix|refactor|review|compound|research|docs|chore|test: ...`.
+5. **CLAUDE.md model-tag validator** — every `### ` entry under `## Discovered Patterns` in `CLAUDE.md` must contain an anchored `model:` line so it can be retired or re-validated on model upgrade.
+6. **CLAUDE.md size guard** — rejects commits that push `CLAUDE.md` past the line limit (default 200). Domain knowledge belongs in `docs/skills/`, not in the constitution.
+7. **Commit-message format** — `feat|fix|refactor|review|compound|research|docs|chore|test: ...`.
 
-A tenth hook, **dependency hallucination check** (`dep-hallucinator` or equivalent on every manifest change), ships commented out in `install.sh` — uncomment after installing the tool of your choice.
+An eighth hook, **dependency hallucination check** (`dep-hallucinator` or equivalent on every manifest change), ships commented out in `install.sh` — uncomment after installing the tool of your choice.
 
 **The verification gate is not a pre-commit hook.** It is the single command declared in `CLAUDE.md`, e.g.:
 ```
@@ -203,7 +207,7 @@ The gate is enforced at **two points**: (1) the agent runs it during a bead and 
 - **Never guess.** If you're unsure, ask me.
 - **Never bypass a hook.** If a hook is wrong, fix the hook.
 - **The verification gate is the merge contract.** A green gate is a merge license. A red gate is a stop signal. There is no third option.
-- **Exhaustiveness is the agent's job.** Completeness of both registers is on you, not on me. Negative-space proofs are required for every new module; new decision points must be added to the decision register the moment they emerge.
+- **Exhaustiveness is the agent's job.** Completeness of both registers is on you, not on me. New failure modes get a row with a binding check the moment they're introduced; new decision points get added to the decision register the moment they emerge. Phase 4 is when the registers are tested adversarially as a whole.
 - **Constrain, don't dictate.** Your job is to bound the agent's choice space, not to script its decisions. If you find yourself writing prose like "first do X, then do Y," look for a hook or schema that would make the prose unnecessary.
 - **Methodology is yours to choose.** If you find a stronger technique than what's in `docs/skills/backpressure-catalog.md`, use it and update the catalog. Do not feel constrained by what previous projects used.
 - **When a rule starts mattering, encode it.** If you find yourself reminding the agent of a rule in prose, that rule should become a hook, a test, a schema, or a type. Promote, don't repeat.

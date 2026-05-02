@@ -16,7 +16,7 @@ Before you emit `BEAD_DONE`, all of the following must be true:
 1. The bead is closed in beads (`bd close <id>`).
 2. The verification gate (single command from `CLAUDE.md`) is green. Run it yourself before emitting `BEAD_DONE` — `ralph.sh` will re-run it immediately after your exit and bind `.last-gate-result` to the real exit code. A BEAD_DONE emitted over a red gate is caught there (and again by the pre-push hook on push).
 3. `.current-bead-type` and `.current-bead-scope` (if it was set) have been removed.
-4. `scripts/ralph/archive.txt` has a new progress entry with the exact header `## YYYY-MM-DD HH:MM - <bead-id>` (the ralph loop's `archive_schema_check` verifies every BEAD_DONE iteration has a matching block — a missing block fails the next push).
+4. `scripts/ralph/archive.txt` has a new progress entry with the exact header `## YYYY-MM-DD HH:MM - <bead-id>` (see Progress report format below).
 5. You emitted `<promise>BEAD_DONE</promise>` as your exit signal.
 
 The bead-type-specific contracts below add further requirements per type. They do not replace these five.
@@ -91,14 +91,7 @@ Done when **all** of:
 
 ## Confidence (bash-derived, not self-graded)
 
-You no longer emit a `<confidence>` tag. `ralph.sh` computes confidence from observable signals after you exit — gate result (bash-run), commit diff size, whether `scripts/hooks/` or `CLAUDE.md` was touched, and the iteration's retry count. The verdict (HIGH / MEDIUM / LOW) is fed to the `auto-land:` policy in `CLAUDE.md` exactly as before, but the routing input is now a measurement, not a prediction.
-
-Two practical consequences for how you do the work:
-
-- **Keep the diff focused.** Large commits downgrade confidence. Splitting work across beads is usually the right answer when the diff for one bead is drifting past the single-purpose boundary.
-- **If you change `scripts/hooks/` or `CLAUDE.md`, expect MEDIUM at best.** Those paths are the enforcement mechanism itself; the downgrade is intentional. Pair the change with the failure-mode / decision-register update that binds it.
-
-`compute_confidence` (`scripts/ralph/lib.sh`) is the single source of truth for the verdict and is covered by `tests/hooks/ralph.bats`.
+You no longer emit a `<confidence>` tag. `compute_confidence` (`scripts/ralph/lib.sh`) is bash-derived from the gate result alone: PASS → HIGH; non-PASS → LOW. The verdict feeds the `auto-land:` policy in `CLAUDE.md`. Covered by `tests/hooks/ralph.bats`.
 
 ## Exit signals
 
@@ -113,7 +106,7 @@ Emit exactly **one** of these. ralph.sh routes on the signal.
 
 ## Progress report format
 
-APPEND to `scripts/ralph/archive.txt` (never replace existing content). The header line is machine-parsed by `archive_schema_check` — it MUST be exactly:
+APPEND to `scripts/ralph/archive.txt` (never replace existing content). The header line shape:
 
 ```
 ## YYYY-MM-DD HH:MM - <bead-id>
@@ -128,7 +121,7 @@ APPEND to `scripts/ralph/archive.txt` (never replace existing content). The head
 ---
 ```
 
-The date+time (or date alone) and `<bead-id>` separated by ` - ` are required — `archive_schema_check` matches `^## [0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]][0-9]{2}:[0-9]{2})? - <bead-id>$`. A different header shape will still parse as prose but will fail the schema check on the next push. Reusable patterns are promoted to `CLAUDE.md` `## Discovered Patterns` by compound beads.
+The date+time (or date alone) and `<bead-id>` separated by ` - ` are conventional — keep this shape so future header-parsing tools can rely on it. Reusable patterns are promoted to `CLAUDE.md` `## Discovered Patterns` by compound beads.
 
 ## Stop
 

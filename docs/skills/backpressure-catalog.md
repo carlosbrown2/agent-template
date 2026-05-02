@@ -15,6 +15,8 @@ The contract you're satisfying is *exhaustive coverage of failure modes*, mechan
 
 Catches bugs before they reach production.
 
+**Mutation testing is a Phase 1 baseline, not a menu item.** Every other technique below answers "does this property hold?" — mutation testing answers "would my checks notice if it didn't?" It is the strongest available defense against the structural-validity-vs-semantic-quality gap: a test suite can be 100% green and still pass `assert isinstance(x, type(x))` shape-only assertions, and only a tool that perturbs the code under test (operator swaps, boundary flips, return-value tampering) will reveal it. Tools: `mutmut` / `cosmic-ray` (Python), Stryker (JS/TS), PIT (Java), Cargo-mutants (Rust). Projects with a non-trivial test suite should treat surviving-mutant rate as a wired-into-CI gate from Phase 1; see the *Mutation testing* sketch below for the shape.
+
 | Technique | What it catches | When to consider |
 |-----------|----------------|-----------------|
 | **Static typing** (e.g., `mypy --strict`, `tsc --strict`) | Type mismatches, missing annotations, wrong signatures | Always — baseline for any typed language |
@@ -30,7 +32,6 @@ Catches bugs before they reach production.
 | **Static analysis beyond types** (e.g., Bandit, Semgrep, CodeQL, pylint, SonarQube) | Security anti-patterns (hardcoded secrets, injection vectors, unsafe deserialization), excessive complexity, dead code, supply-chain vulnerabilities | Always — types catch structural issues; static analysis catches semantic anti-patterns types can't express |
 | **Dependency vulnerability scanning** (e.g., pip-audit, npm audit, Dependabot, Snyk) | Known CVEs in transitive dependencies, outdated packages with security patches | Always — your code may be correct but your dependencies aren't |
 | **Dependency hallucination detection** (e.g., dep-hallucinator, manual registry checks) | Packages recommended by AI that don't exist or are typosquat/slopsquat targets | Always — runs in every verification gate pass |
-| **Mutation testing** (e.g., mutmut, cosmic-ray for Python; Stryker for JS/TS) | Weak test suites that pass but don't actually catch bugs; tests that assert nothing meaningful | When you need confidence that your test suite is effective, not just green |
 | **Browser/E2E automation** (e.g., Puppeteer MCP, Playwright, Cypress) | Visual regressions, broken user flows, client-server integration failures | When the project has a UI — agents can verify features the way a human would, catching issues unit tests miss |
 
 ---
