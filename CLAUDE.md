@@ -7,9 +7,9 @@ This is the **initializer template** itself. The project under development is th
 - `project-kickoff-prompt.md` — the phase-by-phase outcome contract for any project bootstrapped from this template.
 - `scripts/ralph/ralph.sh` — the long-running agent loop. Picks a ready bead, runs the agent, re-runs the verification gate in bash on BEAD_DONE, routes on the observed gate result (PASS → HIGH, anything else → LOW), auto-lands if policy allows.
 - `scripts/ralph/prompt.md` — the per-iteration system prompt the loop feeds the agent.
-- `scripts/hooks/install.sh` — installs the pre-commit chain (bead-type gate, rubric-edit guard, scope enforcement, register integrity + symbol-refs, review artifact validator, model-tag + pattern-citation validator, CLAUDE.md size guard) plus the commit-msg format hook and pre-push gate hook.
+- `scripts/hooks/install.sh` — installs the pre-commit chain (bead-type fail-closed gate, scope enforcement, failure-mode register integrity, decision register integrity, CLAUDE.md model-tag validator, CLAUDE.md size guard) plus the commit-msg format hook and pre-push gate hook.
 - `docs/failure-modes.md` and `docs/decision-register.md` — the two registers that every register-integrity hook parses.
-- `docs/skills/` — domain skill files. `review-rubric.md` ships as a starter that each project refines in Phase 1; `harness-constraints.md` documents the inherited harness invariants (the five patterns the template's own development surfaced).
+- `docs/skills/` — domain skill files. `review-rubric.md` ships as a starter that each project refines in Phase 1; `backpressure-catalog.md` is a menu of mechanical-check techniques implementation beads can pull from.
 
 ## Code Standards
 
@@ -54,4 +54,4 @@ auto-land: all
 
 ## Discovered Patterns
 
-Project-specific patterns the agent surfaces during work land here under `### <title>` entries with `model:` tags and a binding artifact citation (path::symbol, `tests/...` reference, or a register row). Inherited template constraints are documented in `docs/skills/harness-constraints.md` and are not duplicated here.
+Project-specific patterns the agent surfaces during work land here under `### <title>` entries with `model:` tags and a binding artifact citation (path::symbol, `tests/...` reference, or a register row).
