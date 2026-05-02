@@ -22,15 +22,11 @@ setup() {
 }
 
 @test "compute_confidence body uses at most 4 positional parameters" {
-  # Current axes (2026-04-30, after pare bead agent-template-3st):
-  #   $1 gate_result, $2 diff_lines, $3 touched_hooks, $4 touched_claude_md.
-  # The 2026-04-27 entry retired $5 (retry_count); the 2026-04-29 entry
-  # added loop_saturation as the new $5; pare bead agent-template-3st
-  # retired loop_saturation without adding a replacement (the runaway-
-  # loop's structural fixes — integration-pulse beads + pattern_citation_check
-  # — bind the failure class on their own; the runtime detector did not pay
-  # for its surface cost). Any change that raises this cap earns an
-  # explicit back-port-doc entry naming the retirement that pays for it.
+  # Post-collapse (2026-05-01, agent-template-4x5): compute_confidence reads
+  # a single positional ($1 gate_result). The 4-positional cap is retained
+  # as a structural ceiling: a future re-introduction of a downgrade axis
+  # must not raise the cap silently. Any change that raises this cap earns
+  # an explicit back-port-doc entry naming the retirement that pays for it.
   local body max_pos
   body=$(awk '
     /^compute_confidence\(\)[[:space:]]*\{/ { in_fn=1; next }
@@ -38,15 +34,24 @@ setup() {
     in_fn { print }
   ' "$PROJECT_ROOT/scripts/ralph/lib.sh")
   [ -n "$body" ]
-  # Highest positional param referenced in the body. grep extracts $N or
-  # ${N} or ${N:-default}; sed strips the punctuation so sort -n compares
-  # integers, not strings.
+  # Highest positional param referenced in the body. awk extracts every
+  # $N / ${N} / ${N:-default} on each line and tracks the max. awk (vs
+  # grep -oE) handles the zero-match case cleanly: a body with no `$N`
+  # references prints "0" instead of exiting non-zero — preserves the
+  # "no soft-fail escape" CLAUDE.md rule for the test pipeline.
   max_pos=$(printf '%s\n' "$body" \
-    | grep -oE '\$\{?[0-9]+' \
-    | sed 's/[${]//g' \
-    | sort -un \
-    | tail -1)
-  [ -n "$max_pos" ]
+    | awk '
+        {
+          while (match($0, /\$\{?[0-9]+/)) {
+            tok = substr($0, RSTART, RLENGTH)
+            gsub(/[${]/, "", tok)
+            n = tok + 0
+            if (n > max) max = n
+            $0 = substr($0, RSTART + RLENGTH)
+          }
+        }
+        END { print max + 0 }
+      ')
   if [ "$max_pos" -gt 4 ]; then
     echo "compute_confidence references \$$max_pos (cap=4 positional params)." >&2
     echo "Adding an axis requires retiring one — see invariant #3 in" >&2
@@ -56,10 +61,9 @@ setup() {
 }
 
 @test "compute_confidence body has at most 3 downgrade-axis lines" {
-  # Current downgrade axes (2026-04-30, after pare bead agent-template-3st):
-  #   diff_lines > 500
-  #   touched_hooks == "true"
-  #   touched_claude_md == "true"
+  # Post-collapse (2026-05-01, agent-template-4x5): compute_confidence is
+  # single-axis (gate_result), so this count is 0 in the steady state. The
+  # 3-axis cap is retained as a structural ceiling against re-introduction.
   # The pattern matched here is `[[ ... ]] && downgrades=...` — the exact
   # line shape every axis uses inside compute_confidence. A new axis added
   # in any other shape would slip past this count, which is itself a
@@ -71,8 +75,12 @@ setup() {
     in_fn { print }
   ' "$PROJECT_ROOT/scripts/ralph/lib.sh")
   [ -n "$body" ]
+  # awk (vs grep -c) — grep -c exits non-zero on count=0, the post-collapse
+  # normal case, which would abort the assignment under bats's implicit -e
+  # behavior. awk-counting always exits 0 and prints the literal count, so
+  # the rule check below is the only thing that can fail (no soft-fail).
   axis_count=$(printf '%s\n' "$body" \
-    | grep -cE '\[\[[[:space:]].*[[:space:]]\]\][[:space:]]+&&[[:space:]]+downgrades=')
+    | awk '/\[\[[[:space:]].*[[:space:]]\]\][[:space:]]+&&[[:space:]]+downgrades=/ { c++ } END { print c + 0 }')
   if [ "$axis_count" -gt 3 ]; then
     echo "compute_confidence has $axis_count downgrade-axis lines (cap=3)." >&2
     echo "Adding an axis requires retiring one — see invariant #3 in" >&2

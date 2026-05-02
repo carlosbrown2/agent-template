@@ -55,59 +55,26 @@ run_gate() {
   fi
 }
 
-# Compute confidence from observable signals about the just-closed bead.
+# Compute confidence from the observed gate result.
 #
-# Replaces the prior parse_confidence / parse_confidence_bead_done pair that
-# extracted an agent-emitted `<confidence>` tag. Reads bash-observed gate
-# result, commit diff size, and whether risky paths were touched; returns a
-# deterministic verdict the agent cannot spoof.
+# Single-axis: gate=PASS → HIGH; anything else → LOW. The prior 4-axis stack
+# (diff size, touched_hooks, touched_claude_md with carve-out) was a
+# hand-calibrated heuristic stacked on top of the gate's verdict; collapsing
+# to gate-only lets the gate be the single source of truth a future model
+# can reason about, and removes a class of "MEDIUM saturated against a
+# clean gate" misroutes the carve-out chased.
 #
-# Args:
-#   gate_result      — "PASS" auto-lands; anything else returns LOW (fail-
-#                      closed on unknown gate state).
-#   diff_lines       — git show --numstat HEAD summed. Default 0.
-#   touched_hooks    — "true" if HEAD touched scripts/hooks/.
-#   touched_claude_md — "true" if HEAD touched CLAUDE.md outside
-#                       `## Discovered Patterns`.
-#
-# Verdict: gate != "PASS" → LOW; else HIGH downgraded one level per axis:
-# diff_lines>500, touched_hooks, touched_claude_md.
-# 0 downgrades → HIGH; 1 → MEDIUM; 2+ → LOW.
-#
-# Axis count = 4 (gate_result + 3 downgrade axes). Trailing positional args
-# beyond the cap are silently ignored, so a stale 5-arg call site (legacy
-# retry_count or recent_followup_ratio) is treated as no-signal — pins the
-# "ignore legacy N-arg shape" invariant. The loop_saturation axis was
-# retired in pare bead agent-template-3st: the runaway-loop's structural
-# fixes (integration-pulse beads + pattern_citation_check) stay; the
-# runtime detector was a heuristic backstop that did not pay for its
-# surface cost.
-#
-# The 500-line threshold is a heuristic calibrated against the template's
-# own confidence.log distribution. Downstream projects recalibrate against
-# their own iters; pair every threshold change with bracket-test updates
-# pinning the new cut from both sides.
+# Trailing positional args are silently ignored by bash, so legacy callers
+# passing diff_lines / touched_hooks / touched_claude_md (or older
+# retry_count / recent_followup_ratio) collapse to no-signal — the only
+# input that routes is gate_result.
 compute_confidence() {
   local gate_result="$1"
-  local diff_lines="${2:-0}"
-  local touched_hooks="${3:-false}"
-  local touched_claude_md="${4:-false}"
-
-  if [[ "$gate_result" != "PASS" ]]; then
+  if [[ "$gate_result" == "PASS" ]]; then
+    echo "HIGH"
+  else
     echo "LOW"
-    return 0
   fi
-
-  local downgrades=0
-  [[ "$diff_lines" -gt 500 ]] && downgrades=$((downgrades + 1))
-  [[ "$touched_hooks" == "true" ]] && downgrades=$((downgrades + 1))
-  [[ "$touched_claude_md" == "true" ]] && downgrades=$((downgrades + 1))
-
-  case $downgrades in
-    0) echo "HIGH" ;;
-    1) echo "MEDIUM" ;;
-    *) echo "LOW" ;;
-  esac
 }
 
 # Read auto-land policy from CLAUDE.md ## Confidence Routing section.
@@ -141,9 +108,12 @@ read_auto_land_policy() {
 }
 
 # Determine if auto-land is allowed for given confidence + policy.
-# Unknown policy falls back to the documented default ("high"), which is
-# safer than "all" for a template whose default propagates to every
-# downstream project.
+# compute_confidence is binary HIGH/LOW (the MEDIUM tier was retired with
+# the 4-axis collapse), so the policy matrix only sees those two values
+# in practice — `none` always pauses, `all` always lands, and `high` /
+# unknown collapse to "land iff HIGH". Unknown policy falls back to the
+# documented default ("high"), which is safer than "all" for a template
+# whose default propagates to every downstream project.
 should_auto_land() {
   local confidence="$1"
   local policy="$2"
@@ -151,146 +121,15 @@ should_auto_land() {
     all)
       echo "true"
       ;;
-    high)
-      if [[ "$confidence" == "HIGH" ]]; then echo "true"; else echo "false"; fi
-      ;;
     none)
       echo "false"
       ;;
     *)
-      # Unknown policy: safer to pause than to auto-land. Documented
-      # fallback matches the default policy, not the most-permissive one.
+      # `high` and any unknown policy: safer to pause than to auto-land.
       if [[ "$confidence" == "HIGH" ]]; then echo "true"; else echo "false"; fi
       ;;
   esac
 }
-
-# Detect "BEAD_DONE without a new commit" by comparing the HEAD SHA captured
-# at iter start against the HEAD SHA captured at BEAD_DONE detection.
-#
-# Per-iter measurements (diff_lines / touched_hooks / touched_claude_md in
-# scripts/ralph/ralph.sh) read HEAD without verifying it has moved since
-# iter start. If an iter emits BEAD_DONE without committing, the next
-# measurement reads the *prior* commit's diff and credits that work to the
-# current iter — cross-bead contamination compute_confidence cannot detect
-# on its own. The fix is paired observation: one read at iter start, one
-# at the decision point, refuse to grade if the state didn't move.
-#
-# Args:
-#   pre_sha   — git rev-parse HEAD captured before the agent ran.
-#   post_sha  — git rev-parse HEAD captured at BEAD_DONE detection.
-#
-# Returns:
-#   0  HEAD unchanged (pre == post). Caller should force gate_result=FAIL.
-#   1  HEAD moved (pre != post). Normal BEAD_DONE iter — caller proceeds.
-#
-# Intentionally narrow: it does not know *why* HEAD didn't move (agent
-# forgot to commit, hook rejected the commit, agent stopped mid-iteration),
-# only that it didn't. Routing the signal — forcing FAIL vs. ESCALATE vs.
-# something else — is the caller's job in scripts/ralph/ralph.sh, where
-# the rest of compute_confidence's inputs are in scope.
-compute_head_unchanged_for_bead_done() {
-  local pre_sha="$1"
-  local post_sha="$2"
-  if [[ "$pre_sha" == "$post_sha" ]]; then
-    return 0
-  fi
-  return 1
-}
-
-# Detect whether CLAUDE.md was modified in HEAD outside its
-# `## Discovered Patterns` section, by comparing HEAD~1:CLAUDE.md and
-# HEAD:CLAUDE.md with the patterns block stripped from each side.
-#
-# `compute_confidence` downgrades when CLAUDE.md is touched because
-# rule changes warrant scrutiny. But compound beads in this template's
-# quartet pattern (impl → review → pare → compound) routinely promote
-# model-tagged entries to `## Discovered Patterns` — an append-only
-# output section that redefines no rule the gate runs. A naive
-# "did CLAUDE.md change" check downgrades those edits anyway, so every
-# compound bead saturates at MEDIUM regardless of the gate's verdict.
-# This helper scopes the signal to the bug class actually worth pausing
-# on: edits to `## Invariants`, `## Verification Gate`, `## Pinned Tool
-# Versions`, and the prose between sections.
-#
-# Strategy: bypass unified-diff parsing entirely. Read both blob shapes,
-# strip everything from `## Discovered Patterns` to the next top-level
-# `## ` heading (or EOF) on each side, compare the rest. Hunk-header
-# offsets and section reordering are handled trivially because the
-# comparison is on stripped content, not on diff text.
-#
-# Args:
-#   repo_root  — git repo root passed to `git -C`. Defaults to the
-#                current working directory when omitted.
-#
-# Returns:
-#   0  CLAUDE.md was modified outside `## Discovered Patterns` (or the
-#      file was added or removed entirely between HEAD~1 and HEAD).
-#      Caller should treat as `touched_claude_md=true`.
-#   1  CLAUDE.md was unchanged, or the only changes were inside the
-#      patterns section. Caller should treat as `touched_claude_md=false`.
-#
-# Style invariant: CLAUDE.md uses `## ` for top-level sections and `### `
-# for entries inside `## Discovered Patterns`. If a downstream project
-# ever uses `## ` for nested entries, the strip silently mis-bounds —
-# pair an audit bead with that change.
-claude_md_touched_outside_patterns() {
-  local repo_root="${1:-.}"
-  local cur_exists=true prev_exists=true
-  git -C "$repo_root" cat-file -e HEAD:CLAUDE.md 2>/dev/null || cur_exists=false
-  git -C "$repo_root" cat-file -e 'HEAD~1:CLAUDE.md' 2>/dev/null || prev_exists=false
-
-  # File added or deleted (XOR): the file's existence flipped, which is
-  # itself a non-trivial CLAUDE.md change regardless of section content.
-  if [[ "$cur_exists" != "$prev_exists" ]]; then
-    return 0
-  fi
-
-  # Neither side has the file (no parent commit and no current file, or
-  # the project genuinely has no CLAUDE.md): nothing to grade.
-  if [[ "$cur_exists" = "false" ]]; then
-    return 1
-  fi
-
-  local cur prev
-  cur=$(git -C "$repo_root" show HEAD:CLAUDE.md)
-  prev=$(git -C "$repo_root" show 'HEAD~1:CLAUDE.md')
-
-  local strip_awk='/^## Discovered Patterns[[:space:]]*$/{f=1;next} /^## /{f=0} !f'
-  local cur_stripped prev_stripped
-  cur_stripped=$(printf '%s' "$cur" | awk "$strip_awk")
-  prev_stripped=$(printf '%s' "$prev" | awk "$strip_awk")
-
-  if [[ "$cur_stripped" != "$prev_stripped" ]]; then
-    return 0
-  fi
-  return 1
-}
-
-# Title regex for governance / audit beads — Observe / Audit / Decide /
-# Triage / Review the loop. These name the operator's own meta-questions
-# (audit instructions filed against the loop itself); when one sits in
-# `bd ready` indefinitely the loop has been ignoring its own warning siren.
-# Single source of truth for scripts/ralph/ralph.sh's surfacing helper.
-# SC2034 disabled: the only consumer is in a separate sourced file
-# (ralph.sh's _ralph_surface_stale_governance), which shellcheck cannot
-# follow.
-# shellcheck disable=SC2034
-GOVERNANCE_TITLE_REGEX='^(Observe|Audit|Decide|Triage|Review the loop)'
-
-# Shared jq fragment: convert a `bd` ISO-8601 timestamp string to a UTC
-# epoch integer. bd emits offsets like `2026-04-30T07:19:57.075423-06:00`,
-# but `fromdateiso8601` only accepts the `Z` (UTC) suffix — passing an
-# offset-suffixed string crashes the filter. This def strips the
-# fractional seconds, captures the `±HH:MM` offset, parses the naive
-# stamp as UTC, then adjusts. scripts/ralph/ralph.sh's
-# _ralph_surface_stale_governance prepends this def to its jq program so
-# a future bd timestamp shape change lands in one place. Single-quoted:
-# $m / $naive / $off are jq vars, not bash expansions — SC2016 disabled
-# because that's the design. SC2034 disabled because the only consumer
-# is across a `source` boundary (ralph.sh).
-# shellcheck disable=SC2016,SC2034
-BD_DATE_TO_EPOCH_JQ_DEF='def bd_date_to_epoch: sub("\\.[0-9]+"; "") | if test("Z$") then fromdateiso8601 else capture("(?<dt>.+)(?<sign>[+-])(?<oh>[0-9]{2}):(?<om>[0-9]{2})$") as $m | (($m.dt + "Z") | fromdateiso8601) as $naive | (($m.oh | tonumber) * 3600 + ($m.om | tonumber) * 60) as $off | if $m.sign == "+" then $naive - $off else $naive + $off end end;'
 
 # Pure retry-state transition. Given the just-failed bead id, the prior
 # last-failed bead id, the current fail count, and max retries, print the

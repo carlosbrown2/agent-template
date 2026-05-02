@@ -30,18 +30,14 @@ teardown() {
 
 # --- compute_confidence --------------------------------------------------
 #
-# Replaces the removed parse_confidence / parse_confidence_bead_done suite.
-# Those tests pinned the parser against agent-emitted `<confidence>` tags;
-# this suite pins the derivation against observable signals (gate result,
-# commit size, touched-paths, retry count). Each downgrade axis is covered
-# in isolation so a future edit that drops one can only pass by removing
-# the corresponding test — a visible deletion rather than a silent drift.
+# Single-axis routing: gate=PASS → HIGH, anything else → LOW. The prior
+# 4-axis stack (diff size, touched_hooks, touched_claude_md) was a hand-
+# calibrated heuristic stacked on top of the gate verdict; the collapse
+# lets the gate be the single routing input.
 
-@test "compute_confidence: gate FAIL returns LOW regardless of other signals" {
-  # Terminal rule: a red gate forbids HIGH or MEDIUM no matter how clean
-  # everything else looks. If this regresses, compute_confidence becomes a
-  # proxy for diff-size rather than for bead outcome.
-  run compute_confidence "FAIL" 0 "false" "false" 0
+@test "compute_confidence: gate FAIL returns LOW" {
+  # A red gate forbids auto-land. Pins the fail-closed property.
+  run compute_confidence "FAIL"
   [ "$status" -eq 0 ]
   [ "$output" = "LOW" ]
 }
@@ -50,7 +46,7 @@ teardown() {
   # Three-valued .last-gate-result (PASS/FAIL/SKIPPED). SKIPPED means the
   # gate extractor returned empty — unknown gate state. Fail closed to LOW
   # rather than letting an unknown state auto-land.
-  run compute_confidence "SKIPPED" 0 "false" "false" 0
+  run compute_confidence "SKIPPED"
   [ "$status" -eq 0 ]
   [ "$output" = "LOW" ]
 }
@@ -59,107 +55,35 @@ teardown() {
   # Defensive: if the caller forgets to pass gate_result, fall through to
   # LOW. Preserves the "fail closed on unknown gate" property even against
   # a programmer error at the call site.
-  run compute_confidence "" 0 "false" "false" 0
+  run compute_confidence ""
   [ "$status" -eq 0 ]
   [ "$output" = "LOW" ]
 }
 
-@test "compute_confidence: gate PASS with no downgrades returns HIGH" {
-  # Canonical happy path: green gate, small diff, no risky paths touched.
-  # This is the only configuration that auto-lands under 'auto-land: high',
-  # which is the shipped default for the template.
-  run compute_confidence "PASS" 100 "false" "false"
-  [ "$status" -eq 0 ]
-  [ "$output" = "HIGH" ]
-}
-
-@test "compute_confidence: legacy 5-arg shape (extra trailing arg) is ignored, returns HIGH" {
-  # Retired axes: retry_count (5th positional in 2026-04-26 and earlier) and
-  # recent_followup_ratio (5th positional in 2026-04-29 through pare bead
-  # agent-template-3st). Legacy callers still passing an integer or decimal
-  # 5th arg must not cause a misroute — bash silently ignores trailing args
-  # past the function's declared positionals, so a stale call site is
-  # treated as no-signal. Pins that property from the legacy direction.
-  run compute_confidence "PASS" 100 "false" "false" 5
-  [ "$status" -eq 0 ]
-  [ "$output" = "HIGH" ]
-}
-
-@test "compute_confidence: PASS + large diff downgrades to MEDIUM" {
-  # Diff-size threshold (currently 500 lines) is a heuristic for "enough
-  # surface area that a quiet regression could hide." The threshold itself
-  # is an implementation detail; what this test pins is that crossing it
-  # downgrades. If the threshold moves, update the number here.
-  run compute_confidence "PASS" 1000 "false" "false"
-  [ "$status" -eq 0 ]
-  [ "$output" = "MEDIUM" ]
-}
-
-@test "compute_confidence: PASS + diff exactly at threshold stays HIGH" {
-  # Boundary: the rule is strictly >500, not >=500. A 500-line commit is
-  # big but not in the "downgrade" class. Pinning the boundary so a future
-  # `>` vs `>=` flip is caught mechanically.
-  run compute_confidence "PASS" 500 "false" "false"
-  [ "$status" -eq 0 ]
-  [ "$output" = "HIGH" ]
-}
-
-@test "compute_confidence: PASS + diff just above threshold (501) downgrades to MEDIUM" {
-  # Tight bracket on the just-above side: paired with the 500→HIGH test
-  # above, this pins the cut point from both sides. A future `>` vs `>=`
-  # flip would silently shift the boundary by one line; with both 500 and
-  # 501 pinned, exactly one of the two tests fails on a flip and the
-  # diagnostic points at the operator. The wider 1000→MEDIUM test still
-  # asserts "well above the cut downgrades" but cannot catch an off-by-one.
-  run compute_confidence "PASS" 501 "false" "false"
-  [ "$status" -eq 0 ]
-  [ "$output" = "MEDIUM" ]
-}
-
-@test "compute_confidence: PASS + touched scripts/hooks/ downgrades to MEDIUM" {
-  # Changing the enforcement mechanism is higher-risk than changing code
-  # that the enforcement mechanism judges. The downgrade enforces "the
-  # author of a hook change should expect human review."
-  run compute_confidence "PASS" 100 "true" "false"
-  [ "$status" -eq 0 ]
-  [ "$output" = "MEDIUM" ]
-}
-
-@test "compute_confidence: PASS + touched CLAUDE.md downgrades to MEDIUM" {
-  # CLAUDE.md is project rules and the gate command itself. A green gate
-  # against a CLAUDE.md edit is weaker evidence than a green gate against
-  # code, because the gate's own definition may have shifted in the diff.
-  run compute_confidence "PASS" 100 "false" "true"
-  [ "$status" -eq 0 ]
-  [ "$output" = "MEDIUM" ]
-}
-
-@test "compute_confidence: PASS + two downgrade axes collapse to LOW" {
-  # Two independent signals of "this deserves scrutiny" should not average
-  # out to MEDIUM. Each downgrade axis counts on its own; two axes mean LOW.
-  run compute_confidence "PASS" 1000 "true" "false"
-  [ "$status" -eq 0 ]
-  [ "$output" = "LOW" ]
-}
-
-@test "compute_confidence: PASS + all three downgrade axes stay LOW (floor)" {
-  # Floor property: with 3 axes the maximum reachable downgrade count is 3,
-  # and the case statement collapses 2+ to LOW. Pins that the floor holds
-  # for the saturating case (every axis fires) — a regression that introduced
-  # a fourth verdict level (e.g., DANGER for 3+) would surface here.
-  run compute_confidence "PASS" 1000 "true" "true"
-  [ "$status" -eq 0 ]
-  [ "$output" = "LOW" ]
-}
-
-@test "compute_confidence: defaults for omitted trailing args behave like zeros" {
-  # Callers may omit trailing args; the function defaults them to benign
-  # values (0 / false) so a programmer error truncating the call does not
-  # crash under `set -u` inside compute_confidence. PASS with no provided
-  # signals is HIGH — matches the all-clean path above.
+@test "compute_confidence: gate PASS returns HIGH" {
+  # The only auto-land configuration under 'auto-land: high' (the shipped
+  # default for the template).
   run compute_confidence "PASS"
   [ "$status" -eq 0 ]
   [ "$output" = "HIGH" ]
+}
+
+@test "compute_confidence: trailing positional args are silently ignored" {
+  # Legacy call sites passed diff_lines / touched_hooks / touched_claude_md
+  # (and earlier retry_count / recent_followup_ratio). bash drops trailing
+  # args past the declared positionals, so a stale caller still routes on
+  # gate_result alone — pins the "ignore legacy N-arg shape" invariant.
+  run compute_confidence "PASS" 1000 "true" "true" 5
+  [ "$status" -eq 0 ]
+  [ "$output" = "HIGH" ]
+}
+
+@test "compute_confidence: trailing args do not flip a FAIL into HIGH" {
+  # Complement to the above: legacy diff/touched args cannot rescue a red
+  # gate. The single routing input is gate_result.
+  run compute_confidence "FAIL" 0 "false" "false"
+  [ "$status" -eq 0 ]
+  [ "$output" = "LOW" ]
 }
 
 # --- read_auto_land_policy ----------------------------------------------
@@ -276,7 +200,7 @@ EOF
 # --- should_auto_land ---------------------------------------------------
 
 @test "should_auto_land: policy=all, any confidence -> true" {
-  for c in HIGH MEDIUM LOW ""; do
+  for c in HIGH LOW ""; do
     run should_auto_land "$c" "all"
     [ "$status" -eq 0 ]
     [ "$output" = "true" ] || { echo "failed for confidence=$c"; return 1; }
@@ -289,12 +213,6 @@ EOF
   [ "$output" = "true" ]
 }
 
-@test "should_auto_land: policy=high, MEDIUM -> false" {
-  run should_auto_land "MEDIUM" "high"
-  [ "$status" -eq 0 ]
-  [ "$output" = "false" ]
-}
-
 @test "should_auto_land: policy=high, LOW -> false" {
   run should_auto_land "LOW" "high"
   [ "$status" -eq 0 ]
@@ -302,7 +220,7 @@ EOF
 }
 
 @test "should_auto_land: policy=none -> false for every confidence" {
-  for c in HIGH MEDIUM LOW ""; do
+  for c in HIGH LOW ""; do
     run should_auto_land "$c" "none"
     [ "$status" -eq 0 ]
     [ "$output" = "false" ] || { echo "failed for confidence=$c"; return 1; }
@@ -312,20 +230,19 @@ EOF
 @test "should_auto_land: unknown policy falls back to safer 'high' default (HIGH -> true)" {
   # A typo in CLAUDE.md (e.g., "auto-land: al") falls back to the new safer
   # default ("high"), not the old permissive default ("all"). HIGH confidence
-  # still auto-lands; MEDIUM/LOW pause. This is the downstream-safer choice
-  # for a template whose default propagates to every project built on it.
+  # still auto-lands; LOW pauses. This is the downstream-safer choice for a
+  # template whose default propagates to every project built on it.
   run should_auto_land "HIGH" "al"
   [ "$status" -eq 0 ]
   [ "$output" = "true" ]
 }
 
-@test "should_auto_land: unknown policy, MEDIUM -> false (safer default)" {
-  # Complement to the above: with an unrecognized policy, MEDIUM does NOT
-  # auto-land. Previously this test would have returned "true" because the
-  # old fallback was "all"; now it returns "false" because the fallback is
-  # "high". A downstream project that mistypes its policy gets paused
-  # iterations on MEDIUM rather than silent auto-land.
-  run should_auto_land "MEDIUM" "garbage"
+@test "should_auto_land: unknown policy, LOW -> false (safer default)" {
+  # Complement to the above: with an unrecognized policy, LOW does NOT
+  # auto-land. The fallback is "high", so a downstream project that
+  # mistypes its policy gets paused iterations on LOW rather than silent
+  # auto-land.
+  run should_auto_land "LOW" "garbage"
   [ "$status" -eq 0 ]
   [ "$output" = "false" ]
 }
@@ -507,400 +424,6 @@ EOF
   [ "$(cat "$result_file")" = "FAIL" ]
 }
 
-# --- compute_head_unchanged_for_bead_done -------------------------------
-#
-# Bead agent-template-nvd: per-iter measurements (diff_lines / touched_hooks /
-# touched_claude_md) read HEAD without verifying HEAD has moved since iter
-# start. A BEAD_DONE iter that did not commit silently grades the prior
-# bead's diff and credits the result to the wrong work. The helper is the
-# detection layer; ralph.sh forces gate_result=FAIL when it returns 0.
-
-@test "compute_head_unchanged_for_bead_done: pre==post returns 0 (HEAD did not move)" {
-  # The contract: identical SHAs mean BEAD_DONE landed without a commit.
-  # Returns 0 (success exit) so callers can use it directly in `if` —
-  # `if compute_head_unchanged_for_bead_done ...; then force-FAIL; fi`.
-  run compute_head_unchanged_for_bead_done "abc123" "abc123"
-  [ "$status" -eq 0 ]
-}
-
-@test "compute_head_unchanged_for_bead_done: pre!=post returns 1 (commit landed)" {
-  # The happy path: HEAD moved during the iter, so per-iter signals can be
-  # trusted. Returns 1 so the `if` branch above does not fire.
-  run compute_head_unchanged_for_bead_done "abc123" "def456"
-  [ "$status" -eq 1 ]
-}
-
-@test "compute_head_unchanged_for_bead_done: real temp repo, no commit -> unchanged" {
-  # Drives the helper against the actual `git rev-parse HEAD` shape, not
-  # synthetic strings. Reproduces the failure mode: an iter that emits
-  # BEAD_DONE without committing — pre and post both point at the same SHA.
-  cd "$TMPDIR_TEST"
-  git init -q
-  git -c user.email=t@t.test -c user.name=t commit --allow-empty -m "init" -q
-  pre=$(git rev-parse HEAD)
-  post=$(git rev-parse HEAD)
-  run compute_head_unchanged_for_bead_done "$pre" "$post"
-  [ "$status" -eq 0 ]
-}
-
-@test "compute_head_unchanged_for_bead_done: real temp repo, commit between -> moved" {
-  # Complement to the above: a commit lands between the two reads, so the
-  # helper returns non-zero and ralph.sh proceeds to the real gate run.
-  cd "$TMPDIR_TEST"
-  git init -q
-  git -c user.email=t@t.test -c user.name=t commit --allow-empty -m "init" -q
-  pre=$(git rev-parse HEAD)
-  git -c user.email=t@t.test -c user.name=t commit --allow-empty -m "second" -q
-  post=$(git rev-parse HEAD)
-  run compute_head_unchanged_for_bead_done "$pre" "$post"
-  [ "$status" -eq 1 ]
-}
-
-@test "compute_head_unchanged_for_bead_done: both empty (pre-first-commit repo) -> unchanged" {
-  # Edge case: a repo with no commits has rev-parse HEAD failing; ralph.sh
-  # falls back to "" for both pre and post on a stale iter. Empty == empty
-  # is unchanged → FAIL routing — same direction as a real same-SHA pair.
-  run compute_head_unchanged_for_bead_done "" ""
-  [ "$status" -eq 0 ]
-}
-
-# --- claude_md_touched_outside_patterns ---------------------------------
-#
-# Bead agent-template-dvd: the prior `grep -qx CLAUDE.md` proxied the
-# touched_claude_md axis on file-name match alone, so every compound bead
-# that promoted a model-tagged entry to `## Discovered Patterns` got
-# downgraded to MEDIUM even though the gate's rules were unchanged. The
-# replacement strips the patterns block from HEAD~1:CLAUDE.md and
-# HEAD:CLAUDE.md and compares the rest. These tests cover the bead's
-# enumerated edge cases against real temp git repos so the awk regex
-# anchors and the file-existence XOR are both pinned.
-#
-# Helper: write CLAUDE.md content, commit, and stage subsequent edits.
-# Uses git -c overrides so the test does not depend on the runner's
-# committer identity. Quiet flags suppress git's per-commit chatter.
-
-_dvd_init_repo() {
-  cd "$TMPDIR_TEST"
-  git init -q
-  git config user.email t@t.test
-  git config user.name t
-}
-
-_dvd_commit_claude_md() {
-  printf '%s' "$1" > CLAUDE.md
-  git add CLAUDE.md
-  git -c user.email=t@t.test -c user.name=t commit -q -m "$2"
-}
-
-# A representative CLAUDE.md fixture covering the three section axes the
-# downgrade is meant to discriminate: prose, gate-rule body, invariants
-# body, and a Discovered Patterns block. Tests mutate one section per
-# case so the helper's strip-and-compare can prove which axis flipped.
-_dvd_fixture_baseline() {
-  cat <<'EOF'
-# Project Rules
-
-Some prose between sections.
-
-## Verification Gate
-
-```
-bash -n foo.sh && shellcheck foo.sh
-```
-
-## Invariants
-
-- Stays under 200 lines.
-- No bypassing hooks.
-
-## Discovered Patterns
-
-### First pattern
-model: claude-opus-4-7
-Body of the first pattern.
-
-### Second pattern
-model: claude-opus-4-7
-Body of the second pattern.
-EOF
-}
-
-@test "claude_md_touched_outside_patterns: pattern-only edit returns false (compound-bead happy path)" {
-  # The motivating case. A compound bead appends a new ### entry to
-  # ## Discovered Patterns; nothing outside the section moves. The strip
-  # removes the patterns block from both sides, leaving identical residue
-  # — function returns 1 (false), so the touched_claude_md axis stays off
-  # and the iteration can earn HIGH on a green gate.
-  _dvd_init_repo
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "init"
-  # Append a third pattern entry inside ## Discovered Patterns.
-  cat >> base.tmp <<'EOF'
-
-### Third pattern
-model: claude-opus-4-7
-A new pattern body.
-EOF
-  _dvd_commit_claude_md "$(cat base.tmp)" "compound: promote pattern"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 1 ]
-}
-
-@test "claude_md_touched_outside_patterns: ## Invariants edit returns true" {
-  # An invariants-body edit is exactly the rule-shifting class the axis
-  # exists to flag. The strip preserves the Invariants section in both
-  # sides; the diff between them shows up in the comparison and the
-  # function returns 0 (true).
-  _dvd_init_repo
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "init"
-  # Mutate one bullet under ## Invariants.
-  sed -i.bak 's/200 lines/250 lines/' base.tmp
-  rm -f base.tmp.bak
-  _dvd_commit_claude_md "$(cat base.tmp)" "invariants: raise size cap"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 0 ]
-}
-
-@test "claude_md_touched_outside_patterns: ## Verification Gate clause edit returns true" {
-  # A gate-clause edit redefines the property a green .last-gate-result
-  # asserts about the tree — exactly the case the touched_claude_md
-  # downgrade is calibrated for. The strip leaves the gate body intact;
-  # the per-iter comparison flags the change.
-  _dvd_init_repo
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "init"
-  sed -i.bak 's/bash -n foo.sh/bash -n foo.sh \&\& bash -n bar.sh/' base.tmp
-  rm -f base.tmp.bak
-  _dvd_commit_claude_md "$(cat base.tmp)" "gate: add bar.sh parse-check"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 0 ]
-}
-
-@test "claude_md_touched_outside_patterns: no CLAUDE.md change returns false" {
-  # The HEAD commit touches a file other than CLAUDE.md. HEAD:CLAUDE.md
-  # and HEAD~1:CLAUDE.md resolve to identical blobs; stripped, they are
-  # identical too. The function must return 1 — a regression that strips
-  # asymmetrically (e.g. forgets `next` after the patterns marker) would
-  # break this case first.
-  _dvd_init_repo
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "init"
-  printf 'unrelated\n' > other.txt
-  git add other.txt
-  git -c user.email=t@t.test -c user.name=t commit -q -m "add other.txt"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 1 ]
-}
-
-@test "claude_md_touched_outside_patterns: file added in HEAD returns true" {
-  # The file appears for the first time at HEAD: HEAD~1:CLAUDE.md fails
-  # the cat-file existence probe, HEAD:CLAUDE.md succeeds. The XOR branch
-  # short-circuits to true regardless of whether the new file is mostly
-  # patterns — adding the rule file is itself a non-trivial event.
-  _dvd_init_repo
-  # Seed commit so HEAD~1 exists but does not contain CLAUDE.md.
-  printf 'placeholder\n' > seed.txt
-  git add seed.txt
-  git -c user.email=t@t.test -c user.name=t commit -q -m "seed"
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "add CLAUDE.md"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 0 ]
-}
-
-@test "claude_md_touched_outside_patterns: file deleted in HEAD returns true" {
-  # The complement of the file-added case: HEAD~1:CLAUDE.md exists,
-  # HEAD:CLAUDE.md does not. Same XOR short-circuit on opposite polarity.
-  # Deleting the rule file is at least as alarming as editing it.
-  _dvd_init_repo
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "init"
-  git rm -q CLAUDE.md
-  git -c user.email=t@t.test -c user.name=t commit -q -m "remove CLAUDE.md"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 0 ]
-}
-
-@test "claude_md_touched_outside_patterns: live repo smoke — boolean shape only" {
-  # Smoke against the actual project tree. The verdict for any specific
-  # commit changes over time, so this test asserts only the contract
-  # surface: the function exits with 0 or 1 (never crashes, never prints
-  # to stdout) when called against a real repo with real history.
-  run claude_md_touched_outside_patterns "$PROJECT_ROOT"
-  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
-  [ -z "$output" ]
-}
-
-@test "claude_md_touched_outside_patterns: pattern-deletion-only edit returns false" {
-  # Adversarial complement to the pattern-only happy path: removing a
-  # pattern entry (model retirement under § 'Model upgrade drift') is
-  # also a patterns-section-only edit and must not downgrade. A
-  # regression that compared length-of-file or used a one-sided strip
-  # would flip the verdict on deletion while passing on append.
-  _dvd_init_repo
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "init"
-  # Strip the second pattern entry only — leaves first intact.
-  awk '
-    /^### Second pattern/ { skip=1; next }
-    skip && /^### / { skip=0 }
-    skip && /^## / { skip=0 }
-    !skip
-  ' base.tmp > shorter.tmp
-  _dvd_commit_claude_md "$(cat shorter.tmp)" "compound: retire pattern"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 1 ]
-}
-
-@test "claude_md_touched_outside_patterns: edit straddling patterns boundary returns true" {
-  # A mixed edit — one line inside ## Discovered Patterns and one line
-  # outside — must trip the downgrade. The strip keeps the outside line
-  # in the comparison, so even when the patterns delta is the loudest
-  # part of the diff the residue still differs. Pins against a regression
-  # that shorts to false whenever any pattern changed.
-  _dvd_init_repo
-  _dvd_fixture_baseline > base.tmp
-  _dvd_commit_claude_md "$(cat base.tmp)" "init"
-  sed -i.bak 's/Some prose between sections./Some prose between sections, edited./' base.tmp
-  cat >> base.tmp <<'EOF'
-
-### Fourth pattern
-model: claude-opus-4-7
-Body of the fourth pattern.
-EOF
-  rm -f base.tmp.bak
-  _dvd_commit_claude_md "$(cat base.tmp)" "mixed: prose + pattern"
-  run claude_md_touched_outside_patterns "$TMPDIR_TEST"
-  [ "$status" -eq 0 ]
-}
-
-@test "ralph.sh stale-HEAD path forces gate_result=FAIL and writes FAIL to .last-gate-result" {
-  # Integration test: extract ralph.sh's gate-result block (from the
-  # `_RALPH_GATE_RESULT="skipped"` assignment through the closing outer `fi`)
-  # and eval it under variable state that reproduces the stale-HEAD
-  # condition. Must short-circuit run_gate (so a green gate cannot mask the
-  # bug) and must write FAIL to .last-gate-result so the pre-push hook also
-  # rejects the push. Both properties are pinned: a regression that drops
-  # the stale-head branch fails the second assertion; a regression that
-  # lets the gate run anyway fails the first (the stub run_gate returns
-  # PASS, which would clobber FAIL).
-  ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
-  block=$(awk '
-    /^[[:space:]]*_RALPH_GATE_RESULT="skipped"$/ { capture=1 }
-    /^[[:space:]]*# --- Confidence routing/ { exit }
-    capture { print }
-  ' "$ralph")
-  [ -n "$block" ]
-
-  # Stub run_gate so a regression that lets the gate run anyway is caught:
-  # if the stale-HEAD branch is dropped, eval falls through to run_gate,
-  # which returns PASS — opposite of the expected FAIL.
-  run_gate() { printf 'PASS\n' > "$2"; return 0; }
-
-  _RALPH_PROJECT_ROOT="$TMPDIR_TEST"
-  _RALPH_GATE_CMD="true"
-  _RALPH_BEAD_DONE=true
-  _RALPH_STALE_HEAD=true
-
-  eval "$block"
-
-  [ "$_RALPH_GATE_RESULT" = "FAIL" ]
-  [ -f "$TMPDIR_TEST/.last-gate-result" ]
-  [ "$(cat "$TMPDIR_TEST/.last-gate-result")" = "FAIL" ]
-}
-
-@test "ralph.sh non-stale BEAD_DONE path runs the gate normally" {
-  # Complement to the above: when _RALPH_STALE_HEAD=false on BEAD_DONE,
-  # the gate runs as before. Pins that the stale-HEAD branch did not
-  # accidentally swallow the normal path — a regression of the form
-  # `if [[ "$_RALPH_STALE_HEAD" != "false" ]]` (typo, polarity flip)
-  # would force every BEAD_DONE to FAIL, not just stale ones.
-  ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
-  block=$(awk '
-    /^[[:space:]]*_RALPH_GATE_RESULT="skipped"$/ { capture=1 }
-    /^[[:space:]]*# --- Confidence routing/ { exit }
-    capture { print }
-  ' "$ralph")
-  [ -n "$block" ]
-
-  run_gate() { printf 'PASS\n' > "$2"; return 0; }
-
-  _RALPH_PROJECT_ROOT="$TMPDIR_TEST"
-  _RALPH_GATE_CMD="true"
-  _RALPH_BEAD_DONE=true
-  _RALPH_STALE_HEAD=false
-
-  eval "$block"
-
-  [ "$_RALPH_GATE_RESULT" = "PASS" ]
-  [ "$(cat "$TMPDIR_TEST/.last-gate-result")" = "PASS" ]
-}
-
-@test "ralph.sh confidence.log carries stale_head=true on stale-HEAD iter" {
-  # The audit-trail half of the contract: the confidence.log line must
-  # carry `stale_head=true` so a future grep can find these iters without
-  # cross-correlating against git log timestamps. Extracts the auto-land
-  # branch's _ralph_emit_log call (post-kb6) and eval's it under stale-HEAD
-  # state. The pre-fix log line had no stale_head field at all; the fix
-  # adds it through the _RALPH_STALE_HEAD_FIELD interpolation. Both branches
-  # (HIGH-and-auto-land and confidence=NONE) carry the field — this test
-  # pins the auto-land one; the next test pins the NONE branch.
-  _load_ralph_helpers
-  ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
-  log_line=$(awk '/^[[:space:]]*_ralph_emit_log .*auto_land=/ { print; exit }' "$ralph")
-  [ -n "$log_line" ]
-
-  _RALPH_I=1
-  _RALPH_BEAD_ID="agent-template-xyz"
-  _RALPH_BEAD_TYPE="impl"
-  _RALPH_BEAD_TITLE="impl: do the thing"
-  _RALPH_BEAD_DONE=true
-  _RALPH_CONFIDENCE="LOW"
-  _RALPH_POLICY="all"
-  _RALPH_AUTO_LAND="false"
-  _RALPH_GATE_RESULT="FAIL"
-  _RALPH_STALE_HEAD_FIELD=" stale_head=true"
-  _RALPH_COMPLETED_SUMMARY="(no new commit — stale HEAD)"
-  _RALPH_CONFIDENCE_LOG="$TMPDIR_TEST/confidence.log"
-  : > "$_RALPH_CONFIDENCE_LOG"
-
-  eval "$log_line"
-
-  emitted=$(cat "$_RALPH_CONFIDENCE_LOG")
-  [[ "$emitted" == *"stale_head=true"* ]] || { echo "Got: $emitted"; return 1; }
-}
-
-@test "ralph.sh confidence.log omits stale_head field on healthy iter" {
-  # Complement: healthy iters do not pollute the log with stale_head=false.
-  # A future audit grepping `stale_head=true` would otherwise still match
-  # negated forms in less-careful greps; keeping the field absent on
-  # healthy iters means the presence of the substring is itself the signal.
-  _load_ralph_helpers
-  ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
-  log_line=$(awk '/^[[:space:]]*_ralph_emit_log .*auto_land=/ { print; exit }' "$ralph")
-  [ -n "$log_line" ]
-
-  _RALPH_I=1
-  _RALPH_BEAD_ID="agent-template-xyz"
-  _RALPH_BEAD_TYPE="impl"
-  _RALPH_BEAD_TITLE="impl: do the thing"
-  _RALPH_BEAD_DONE=true
-  _RALPH_CONFIDENCE="HIGH"
-  _RALPH_POLICY="all"
-  _RALPH_AUTO_LAND="true"
-  _RALPH_GATE_RESULT="PASS"
-  _RALPH_STALE_HEAD_FIELD=""
-  _RALPH_COMPLETED_SUMMARY="feat: [agent-template-xyz] - did the thing"
-  _RALPH_CONFIDENCE_LOG="$TMPDIR_TEST/confidence.log"
-  : > "$_RALPH_CONFIDENCE_LOG"
-
-  eval "$log_line"
-
-  emitted=$(cat "$_RALPH_CONFIDENCE_LOG")
-  [[ "$emitted" != *"stale_head"* ]] || { echo "Got: $emitted"; return 1; }
-}
-
 # --- confidence.log bead-id source -------------------------------------
 #
 # Regression bead agent-template-65s: ralph.sh's two BEAD_DONE confidence.log
@@ -943,7 +466,6 @@ EOF
   _RALPH_POLICY="all"
   _RALPH_AUTO_LAND="true"
   _RALPH_GATE_RESULT="PASS"
-  _RALPH_STALE_HEAD_FIELD=""
   _RALPH_COMPLETED_SUMMARY="feat: [agent-template-xyz] - did the thing"
   _RALPH_CONFIDENCE_LOG="$TMPDIR_TEST/confidence.log"
   : > "$_RALPH_CONFIDENCE_LOG"
@@ -972,7 +494,6 @@ EOF
   _RALPH_BEAD_TITLE="impl: do the thing"
   _RALPH_BEAD_DONE=true
   _RALPH_GATE_RESULT="PASS"
-  _RALPH_STALE_HEAD_FIELD=""
   _RALPH_COMPLETED_SUMMARY="feat: [agent-template-xyz] - did the thing"
   _RALPH_CONFIDENCE_LOG="$TMPDIR_TEST/confidence.log"
   : > "$_RALPH_CONFIDENCE_LOG"
@@ -996,8 +517,8 @@ EOF
 #
 # These helpers live in ralph.sh (not lib.sh) — ralph.sh is meant to be
 # sourced and runs the agent loop, so we extract the function definitions
-# via awk and eval them in isolation. Same shape used by the existing
-# stale-HEAD / log-emit tests above.
+# via awk and eval them in isolation. Same shape used by the log-emit
+# tests above.
 
 _load_ralph_helpers() {
   local fns
@@ -1222,13 +743,12 @@ EOF
   # is not confused by the adjacent `bead_type=` field.
   [ "$(echo "$emitted" | grep -oE 'bead=[^ ]+')" = "bead=agent-template-xyz" ]
 
-  # (b) empty status + completed=yes (BEAD_DONE shape) + stale_head substring
-  # carried inside the middle string.
+  # (b) empty status + completed=yes (BEAD_DONE shape).
   : > "$_RALPH_CONFIDENCE_LOG"
   _ralph_emit_log "" "agent-template-xyz" \
-    "bead_done=true confidence=HIGH gate_result=PASS stale_head=true" "yes"
+    "bead_done=true confidence=HIGH gate_result=PASS" "yes"
   emitted=$(cat "$_RALPH_CONFIDENCE_LOG")
-  [[ "$emitted" == *"iter=7 bead=agent-template-xyz bead_type=impl bead_done=true confidence=HIGH gate_result=PASS stale_head=true"* ]] \
+  [[ "$emitted" == *"iter=7 bead=agent-template-xyz bead_type=impl bead_done=true confidence=HIGH gate_result=PASS"* ]] \
     || { echo "Got: $emitted"; return 1; }
   [[ "$emitted" == *'completed="feat: [agent-template-xyz] - did the thing"'* ]] \
     || { echo "Got: $emitted"; return 1; }
@@ -1282,8 +802,8 @@ EOF
 _ralph_emit_log "BLOCKED"|no|_RALPH_ACTIVE_BEAD="agent-template-xyz"; _RALPH_BLOCKED_REASON="missing dep"
 _ralph_emit_log "REWORK"|no|_RALPH_ACTIVE_BEAD="agent-template-xyz"; _RALPH_REWORK_REASON="prereq incomplete"
 _ralph_emit_log "ESCALATION"|no|_RALPH_FAILED_BEAD="agent-template-xyz"; _RALPH_FAIL_COUNT=3
-_ralph_emit_log .*auto_land=|yes|_RALPH_BEAD_ID="agent-template-xyz"; _RALPH_BEAD_DONE=true; _RALPH_CONFIDENCE="HIGH"; _RALPH_POLICY="all"; _RALPH_AUTO_LAND="true"; _RALPH_GATE_RESULT="PASS"; _RALPH_STALE_HEAD_FIELD=""; _RALPH_COMPLETED_SUMMARY="feat: [agent-template-xyz] - did the thing"
-_ralph_emit_log .*confidence=NONE|yes|_RALPH_BEAD_ID="agent-template-xyz"; _RALPH_BEAD_DONE=true; _RALPH_GATE_RESULT="PASS"; _RALPH_STALE_HEAD_FIELD=""; _RALPH_COMPLETED_SUMMARY="feat: [agent-template-xyz] - did the thing"
+_ralph_emit_log .*auto_land=|yes|_RALPH_BEAD_ID="agent-template-xyz"; _RALPH_BEAD_DONE=true; _RALPH_CONFIDENCE="HIGH"; _RALPH_POLICY="all"; _RALPH_AUTO_LAND="true"; _RALPH_GATE_RESULT="PASS"; _RALPH_COMPLETED_SUMMARY="feat: [agent-template-xyz] - did the thing"
+_ralph_emit_log .*confidence=NONE|yes|_RALPH_BEAD_ID="agent-template-xyz"; _RALPH_BEAD_DONE=true; _RALPH_GATE_RESULT="PASS"; _RALPH_COMPLETED_SUMMARY="feat: [agent-template-xyz] - did the thing"
 EOF
 }
 
@@ -1371,94 +891,16 @@ EOF
 @test "_ralph_cleanup unsets the new globals" {
   # The cleanup function must `unset` every new _RALPH_ var so sourcing
   # ralph.sh repeatedly (e.g., in an outer test harness) does not leak
-  # stale type/title/desc/summary/governance-json from a prior run into the next.
+  # stale type/title/desc/summary from a prior run into the next.
   _load_ralph_helpers
   _RALPH_HAD_NOUNSET=0
   _RALPH_BEAD_TYPE="impl"
   _RALPH_BEAD_DESCRIPTION="X"
   _RALPH_COMPLETED_SUMMARY="Y"
-  _RALPH_GOVERNANCE_JSON='[]'
   _ralph_cleanup
   [ -z "${_RALPH_BEAD_TYPE:-}" ]
   [ -z "${_RALPH_BEAD_DESCRIPTION:-}" ]
   [ -z "${_RALPH_COMPLETED_SUMMARY:-}" ]
-  [ -z "${_RALPH_GOVERNANCE_JSON:-}" ]
-}
-
-# --- _ralph_surface_stale_governance ------------------------------------
-#
-# Bead agent-template-ebh introduced governance-bead surfacing (>3d) and a
-# >7d force-LOW predicate; bead agent-template-79f demoted the predicate
-# back out, leaving the visibility helper alone. Governance beads (Observe
-# / Audit / Decide / Triage / Review the loop) sit in `bd ready`
-# indefinitely because they get the same priority as module work; printing
-# them above the iter banner gives the operator first-line warning without
-# a runtime confidence override.
-
-# Build an ISO-8601 timestamp for `now - days*86400` seconds. Uses
-# `date -ur SECONDS +FORMAT` which is portable across BSD (macOS) and
-# GNU date — `-r` reads epoch seconds, `-u` outputs UTC, the explicit
-# `+00:00` suffix avoids `date`'s `+%z` BSD/GNU-formatting drift.
-_iso_n_days_ago() {
-  local now_epoch="$1"
-  local days="$2"
-  date -ur "$(( now_epoch - days * 86400 ))" +%Y-%m-%dT%H:%M:%S+00:00
-}
-
-@test "_ralph_surface_stale_governance: prints under header for >3d matching bead" {
-  # The visibility half: the operator sees the stale bead before the
-  # agent claims its next module bead. Output shape is
-  # `⚠ Stale governance:` header followed by indented `id (Nd) title`.
-  _load_ralph_helpers
-  source "$PROJECT_ROOT/scripts/ralph/lib.sh"
-  local now; now=$(date +%s)
-  local ts; ts=$(_iso_n_days_ago "$now" 5)
-  local json
-  json='[{"id":"agent-template-uq6","title":"Observe ralph loop","created_at":"'$ts'"}]'
-  run _ralph_surface_stale_governance "$json"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"⚠ Stale governance:"* ]] || { echo "Got: $output" >&2; return 1; }
-  [[ "$output" == *"agent-template-uq6 (5d) Observe ralph loop"* ]] || { echo "Got: $output" >&2; return 1; }
-}
-
-@test "_ralph_surface_stale_governance: silent on ≤3d matching bead" {
-  # Surfacing kicks in at >3d (operator's first warning), separate from
-  # the >7d hard force-LOW rule. A 2d-old governance bead is recent and
-  # not yet stale; printing it would dilute the signal.
-  _load_ralph_helpers
-  source "$PROJECT_ROOT/scripts/ralph/lib.sh"
-  local now; now=$(date +%s)
-  local ts; ts=$(_iso_n_days_ago "$now" 2)
-  local json
-  json='[{"id":"agent-template-xxx","title":"Audit recent","created_at":"'$ts'"}]'
-  run _ralph_surface_stale_governance "$json"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "_ralph_surface_stale_governance: silent on non-matching bead at >3d" {
-  # Phase 3 impl: bead at 30 days is not governance. Visibility surface
-  # must not list module work — that's what the existing iter banner is for.
-  _load_ralph_helpers
-  source "$PROJECT_ROOT/scripts/ralph/lib.sh"
-  local now; now=$(date +%s)
-  local ts; ts=$(_iso_n_days_ago "$now" 30)
-  local json
-  json='[{"id":"agent-template-yyy","title":"Phase 3 impl: do the thing","created_at":"'$ts'"}]'
-  run _ralph_surface_stale_governance "$json"
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
-}
-
-@test "_ralph_surface_stale_governance: silent on empty input (bd unreachable)" {
-  # Best-effort visibility: bd-call failure produces empty input, helper
-  # silently no-ops. A spurious header printed on every empty-input call
-  # would train the operator to ignore the warning siren.
-  _load_ralph_helpers
-  source "$PROJECT_ROOT/scripts/ralph/lib.sh"
-  run _ralph_surface_stale_governance ""
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
 }
 
 # --- BEAD_ID_REGEX drift --------------------------------------------------

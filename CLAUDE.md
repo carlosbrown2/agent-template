@@ -5,7 +5,7 @@ This is the **initializer template** itself. The project under development is th
 ## Architecture
 
 - `project-kickoff-prompt.md` — the phase-by-phase outcome contract for any project bootstrapped from this template.
-- `scripts/ralph/ralph.sh` — the long-running agent loop. Picks a ready bead, runs the agent, re-runs the verification gate in bash on BEAD_DONE, derives confidence from observed signals (gate result, diff size, touched hooks/CLAUDE.md, retry count), auto-lands if policy allows.
+- `scripts/ralph/ralph.sh` — the long-running agent loop. Picks a ready bead, runs the agent, re-runs the verification gate in bash on BEAD_DONE, routes on the observed gate result (PASS → HIGH, anything else → LOW), auto-lands if policy allows.
 - `scripts/ralph/prompt.md` — the per-iteration system prompt the loop feeds the agent.
 - `scripts/hooks/install.sh` — installs the pre-commit chain (bead-type gate, rubric-edit guard, scope enforcement, register integrity + symbol-refs, review artifact validator, model-tag + pattern-citation validator, CLAUDE.md size guard) plus the commit-msg format hook and pre-push gate hook.
 - `docs/failure-modes.md` and `docs/decision-register.md` — the two registers that every register-integrity hook parses.
