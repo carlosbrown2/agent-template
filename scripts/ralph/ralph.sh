@@ -159,7 +159,7 @@ command -v jq >/dev/null 2>&1 || {
 }
 
 # Parse arguments
-_RALPH_TOOL="claude"
+_RALPH_TOOL="codex"
 _RALPH_MAX_ITERATIONS=30
 
 while [[ $# -gt 0 ]]; do

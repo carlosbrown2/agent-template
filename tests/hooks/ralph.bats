@@ -36,6 +36,11 @@ teardown() {
   grep -qF "Must be 'claude', 'codex', or 'amp'." "$ralph"
 }
 
+@test "ralph.sh defaults to codex" {
+  ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
+  grep -qF '_RALPH_TOOL="codex"' "$ralph"
+}
+
 @test "ralph.sh codex branch uses non-interactive exec rooted at the repo" {
   ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
   grep -qF '[[ "$_RALPH_TOOL" == "codex" ]]' "$ralph"

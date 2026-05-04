@@ -84,18 +84,18 @@ The initializer walks you through 5 phases. Each phase is an outcome contract â€
 Once initialization is complete, `ralph.sh` runs the implementation loop â€” each iteration spawns a fresh agent that completes exactly one bead:
 
 ```bash
-# Run with Claude Code (default)
+# Run with Codex (default)
 source scripts/ralph/ralph.sh
 
-# Run with Codex
-source scripts/ralph/ralph.sh --tool codex
+# Run with Claude Code
+source scripts/ralph/ralph.sh --tool claude
 
 # Run with Amp
 source scripts/ralph/ralph.sh --tool amp
 
 # Limit iterations
 source scripts/ralph/ralph.sh 50
-source scripts/ralph/ralph.sh --tool codex 50
+source scripts/ralph/ralph.sh --tool claude 50
 source scripts/ralph/ralph.sh --tool amp 50
 ```
 
