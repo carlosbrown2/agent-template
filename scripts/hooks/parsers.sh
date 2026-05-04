@@ -24,7 +24,7 @@ PARSERS_BEAD_ID_REGEX='[a-z][-a-z0-9]*-[a-z0-9]{2,}'
 # stdout — otherwise a silent `bd` failure bypasses the entire gate chain
 # that conditions on "is a bead in progress?"
 #
-# Uses --json throughout so a change in `bd list`'s human-readable TUI
+# Uses --no-daemon + --json throughout so a change in `bd list`'s human-readable TUI
 # format cannot silently flip the extraction result. install.sh and
 # ralph.sh both use this path (via _ralph_bead_in_progress in ralph.sh
 # which wraps the same jq invocation) so the two cannot disagree about
@@ -36,7 +36,7 @@ bd_bead_in_progress() {
     return 0
   }
   local raw
-  if ! raw=$(bd list --status=in_progress --json 2>/dev/null); then
+  if ! raw=$(bd --no-daemon list --status=in_progress --json 2>/dev/null); then
     # bd exists but failed: do NOT silently pass. The caller should block.
     echo "bd list --status=in_progress failed" >&2
     return 1
@@ -267,4 +267,3 @@ claude_model_tags_check() {
   fi
   return 0
 }
-

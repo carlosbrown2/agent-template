@@ -4,12 +4,13 @@
 #
 # Hooks installed (pre-commit, in execution order inside the hook):
 #   1. CLAUDE.md size guard
-#   2. Dependency hallucination check (commented out)
-#   3. Bead type fail-closed gate (fail-closed on bd extraction failure)
-#   4. Scope enforcement
-#   5. Failure-mode register integrity
-#   6. Decision register integrity
-#   7. CLAUDE.md model-tag validator
+#   2. Secrets scan (gitleaks; warns and continues if gitleaks not installed)
+#   3. Dependency hallucination check (active; warns if dep-hallucinator not installed)
+#   4. Bead type fail-closed gate (fail-closed on bd extraction failure)
+#   5. Scope enforcement
+#   6. Failure-mode register integrity
+#   7. Decision register integrity
+#   8. CLAUDE.md model-tag validator
 #
 # Also installed:
 #   commit-msg: enforces "<type>: [bead-id] - <title>" format on bead commits
@@ -66,21 +67,52 @@ if git diff --cached --name-only | grep -q "^CLAUDE.md$"; then
   fi
 fi
 
+# --- Secrets scan ---
+# gitleaks scans staged changes for hardcoded credentials (API keys, tokens,
+# private keys, etc.). For a backend that handles customer data + LLM API
+# keys + model-generated SQL, a leaked credential is a P0 incident class
+# with no other mechanical check in this chain. The block is fail-warn if
+# gitleaks is not installed (so Phase 1 bootstrap on a fresh machine is not
+# blocked) but fail-closed if gitleaks is installed and reports findings.
+# Install once and the warning goes away; once installed, it stays binding.
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --no-banner --redact; then
+    echo ""
+    echo "BLOCKED: gitleaks detected potential secrets in staged changes."
+    echo ""
+    echo "  Review the findings above. If a finding is a verified false positive,"
+    echo "  add its fingerprint to .gitleaksignore (one per line) and re-stage."
+    echo "  Never bypass with --no-verify — leaked secrets cannot be unleaked."
+    exit 1
+  fi
+else
+  echo "WARNING: gitleaks not installed; skipping secrets scan."
+  echo "  Install: brew install gitleaks   (or: https://github.com/gitleaks/gitleaks)"
+fi
+
 # --- Dependency hallucination check ---
-# Uncomment after installing dep-hallucinator:
-#
-# MANIFEST_FILES=$(git diff --cached --name-only | grep -E '(requirements.*\.txt|package\.json|pyproject\.toml|Cargo\.toml|go\.mod)' || true)
-# if [ -n "$MANIFEST_FILES" ]; then
-#   if command -v dep-hallucinator &>/dev/null; then
-#     dep-hallucinator check $MANIFEST_FILES || {
-#       echo "BLOCKED: Dependency hallucination check failed."
-#       exit 1
-#     }
-#   else
-#     echo "WARNING: dep-hallucinator not installed. Skipping dependency validation."
-#     echo "  Install: pip install dep-hallucinator"
-#   fi
-# fi
+# dep-hallucinator scans staged manifest files for hallucinated/typo-squatted
+# packages — a real attack surface for LLM-generated code that proposes
+# imports. Fail-warn if dep-hallucinator is not installed (Phase 1 bootstrap
+# may run before tooling is present) but fail-closed if it is installed and
+# reports findings on a staged manifest.
+MANIFEST_FILES=$(git diff --cached --name-only | grep -E '(requirements.*\.txt|package\.json|pyproject\.toml|Cargo\.toml|go\.mod)' || true)
+if [ -n "$MANIFEST_FILES" ]; then
+  if command -v dep-hallucinator >/dev/null 2>&1; then
+    # shellcheck disable=SC2086  # MANIFEST_FILES is intentionally word-split.
+    if ! dep-hallucinator check $MANIFEST_FILES; then
+      echo "BLOCKED: dep-hallucinator detected suspect dependencies in staged manifests."
+      echo ""
+      echo "  Review the findings above. Each flagged package is a candidate for typo-squat,"
+      echo "  hallucination, or supply-chain risk — verify upstream provenance before merging."
+      echo "  Never bypass with --no-verify — hallucinated deps are an exploitable vector."
+      exit 1
+    fi
+  else
+    echo "WARNING: dep-hallucinator not installed; skipping dependency validation."
+    echo "  Install: pip install dep-hallucinator   (or: npm install -g dep-hallucinator)"
+  fi
+fi
 
 # --- Bead type detection (fail-closed on bd errors too) ---
 # When a bead is in progress (per the beads CLI), .current-bead-type MUST exist
@@ -481,6 +513,7 @@ echo "  - Pre-commit: Failure-mode register integrity (active — fires only if 
 echo "  - Pre-commit: Decision register integrity + bounding-mechanism file refs (active — fires only if docs/decision-register.md exists)"
 echo "  - Pre-commit: CLAUDE.md model-tag validator (active — fires only if CLAUDE.md is staged)"
 echo "  - Pre-commit: CLAUDE.md size guard (active)"
-echo "  - Pre-commit: Dependency hallucination check (commented out — uncomment after installing dep-hallucinator)"
+echo "  - Pre-commit: Secrets scan (active — runs gitleaks if installed; warns and continues otherwise)"
+echo "  - Pre-commit: Dependency hallucination check (active — runs dep-hallucinator on staged manifests if installed; warns and continues otherwise)"
 echo "  - Commit-msg: Format validation (active — [bead-id] - <title> enforced for bead commits)"
 echo "  - Pre-push:   Verification gate re-run (active — extracts gate from CLAUDE.md and compares against .last-gate-result if present)"

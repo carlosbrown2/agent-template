@@ -66,11 +66,15 @@ The initializer walks you through 5 phases. Each phase is an outcome contract �
    # bats (runs tests/hooks/; part of the verification gate)
    brew install bats-core      # or: npm install -g bats
 
+   # Secrets scan (part of the pre-commit chain; the hook warns and continues if missing,
+   # but install once and the warning goes away — leaked secrets cannot be unleaked)
+   brew install gitleaks       # or: https://github.com/gitleaks/gitleaks
+
+   # Dependency hallucination detection (part of the pre-commit chain; same fail-warn / fail-closed shape as gitleaks)
+   pip install dep-hallucinator   # or: npm install -g dep-hallucinator
+
    # Pre-commit hooks (optional but recommended)
    ./scripts/hooks/install.sh
-
-   # Dependency hallucination detection (optional)
-   pip install dep-hallucinator   # or: npm install -g dep-hallucinator
    ```
 
 3. Direct your agent to walk through `project-kickoff-prompt.md`. It guides the agent through the full workflow: spec (PRD), beads, implementation, and review.
@@ -83,11 +87,15 @@ Once initialization is complete, `ralph.sh` runs the implementation loop — eac
 # Run with Claude Code (default)
 source scripts/ralph/ralph.sh
 
+# Run with Codex
+source scripts/ralph/ralph.sh --tool codex
+
 # Run with Amp
 source scripts/ralph/ralph.sh --tool amp
 
 # Limit iterations
 source scripts/ralph/ralph.sh 50
+source scripts/ralph/ralph.sh --tool codex 50
 source scripts/ralph/ralph.sh --tool amp 50
 ```
 
@@ -141,18 +149,18 @@ These appear after the first ralph iteration and are **not** shipped with the te
 
 ### Pre-commit hooks (installed by `./scripts/hooks/install.sh`)
 
-Six pre-commit hooks ship enabled, plus a commit-msg format hook and a pre-push gate hook. Each row is a failure class the register has seen at least once:
+Eight pre-commit hooks ship enabled, plus a commit-msg format hook and a pre-push gate hook. Each row is a failure class the register has seen at least once:
 
 | Hook | What it enforces |
 |---|---|
 | CLAUDE.md size guard | Rejects commits pushing `CLAUDE.md` over 200 lines. Domain knowledge overflows to `docs/skills/` rather than letting the project-rules file accrete. |
+| Secrets scan | Runs `gitleaks protect --staged` on every commit; rejects commits that contain hardcoded credentials, tokens, or private keys. Fail-warn (skip with a notice) if `gitleaks` is not installed so Phase 1 bootstrap is not blocked; fail-closed once installed — leaked secrets cannot be unleaked even after rotation. |
+| Dependency hallucination check | Runs `dep-hallucinator check` on staged manifest files (`requirements*.txt`, `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`); rejects commits that introduce hallucinated or typo-squatted packages. Same fail-warn / fail-closed shape as the secrets scan. |
 | Bead type fail-closed gate | When a bead is in progress, `.current-bead-type` must exist and hold a valid value (`impl`/`review`/`pare`/`compound`/`research`). Closes the "skip the marker → no enforcement" bypass for the hooks below. Fail-closed on `bd` extraction errors too: if `bd list --status=in_progress --json` fails or returns non-parseable JSON, the commit is BLOCKED rather than silently treated as "no bead in progress". |
 | Scope enforcement | `impl`/`pare`/`compound` beads must declare `.current-bead-scope`; commits outside the scope are rejected (infrastructure paths exempted; compound beads also get `CLAUDE.md`, `docs/skills/`, and `tests/regression/`). |
 | Failure-mode register integrity | Every row in `docs/failure-modes.md` is single-line, its last cell holds an acceptable Status (`covered`/`proven-impossible`/`out-of-scope`), and every referenced check file exists on disk. |
 | Decision register integrity | `docs/decision-register.md` has all baseline rows; every row is single-line with ≥5 columns and a last-cell Status of `bounded`/`ritual-bounded`/`agent-discretion`/`escalation-only`; every referenced bounding-mechanism file exists on disk. |
 | CLAUDE.md model-tag validator | Every `### ` entry under `## Discovered Patterns` carries an anchored `model:` tag identifying its source model so the pattern can be retired or re-validated on model upgrade. |
-
-A seventh hook, **dependency hallucination check**, ships commented out — uncomment after installing `dep-hallucinator` (or your preferred equivalent).
 
 Two more hooks ship as separate git-hook files:
 

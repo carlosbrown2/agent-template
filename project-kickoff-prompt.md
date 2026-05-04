@@ -65,7 +65,7 @@ Each row must be a single line — multi-line visual continuations are not parse
 | Model upgrade drift       | model swap                | every promoted pattern tagged with source model; retire unless re-validated       | upgrade ritual: re-run both registers under the new model before resuming         | ritual-bounded   |
 | Scope creep               | every commit              | `.current-bead-scope` declares allowed paths; infrastructure paths always allowed | scope enforcement hook                                                            | bounded          |
 | Artifact format           | review / research beads   | review artifacts cite the rubric and contain a severity clause                    | review-bead contract in scripts/ralph/prompt.md; human read of docs/reviews/<bead-id>.md | ritual-bounded   |
-| Sampling variance         | every model invocation    | `--print` mode, single-shot, fresh context per bead                               | ralph.sh invocation; one-bead-per-iteration                                       | bounded          |
+| Sampling variance         | every model invocation    | non-interactive agent mode (`claude --print`, `codex exec`, or equivalent), single-shot, fresh context per bead | ralph.sh invocation; one-bead-per-iteration                                       | bounded          |
 | Confidence                | post-agent routing on BEAD_DONE | bash-derived from gate result — PASS → HIGH, anything else → LOW            | scripts/ralph/lib.sh compute_confidence + should_auto_land routing against `auto-land:` policy in CLAUDE.md | bounded          |
 | Verification truth        | every "done" claim        | one command from `CLAUDE.md`, not agent judgment                                  | scripts/ralph/lib.sh run_gate writes .last-gate-result on BEAD_DONE; pre-push hook re-runs the gate as defense in depth | bounded          |
 | Architectural choice      | new subsystem design      | escalate to human; agent does not decide alone                                    | `<promise>BLOCKED</promise>` with reason                                          | escalation-only  |
@@ -190,9 +190,9 @@ If a rule matters, it must be enforced mechanically. Prose is for context; gates
 4. **Decision register integrity** — rejects commits where `docs/decision-register.md` is missing baseline rows, contains a multi-line/malformed row, has a row whose last cell isn't an acceptable Status, or names a bounding-mechanism file that does not exist.
 5. **CLAUDE.md model-tag validator** — every `### ` entry under `## Discovered Patterns` in `CLAUDE.md` must contain an anchored `model:` line so it can be retired or re-validated on model upgrade.
 6. **CLAUDE.md size guard** — rejects commits that push `CLAUDE.md` past the line limit (default 200). Domain knowledge belongs in `docs/skills/`, not in the constitution.
-7. **Commit-message format** — `feat|fix|refactor|review|compound|research|docs|chore|test: ...`.
-
-An eighth hook, **dependency hallucination check** (`dep-hallucinator` or equivalent on every manifest change), ships commented out in `install.sh` — uncomment after installing the tool of your choice.
+7. **Secrets scan** — `gitleaks protect --staged` on every commit; rejects commits that contain hardcoded credentials, tokens, or private keys. Fail-warn (skip with a notice) when `gitleaks` is not installed so Phase 1 bootstrap is not blocked; fail-closed once installed — leaked secrets cannot be unleaked even after rotation.
+8. **Dependency hallucination check** — `dep-hallucinator check` on every staged manifest (`requirements*.txt`, `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`); rejects commits that introduce hallucinated or typo-squatted packages. Same fail-warn / fail-closed shape as the secrets scan.
+9. **Commit-message format** — `feat|fix|refactor|review|compound|research|docs|chore|test: ...`.
 
 **The verification gate is not a pre-commit hook.** It is the single command declared in `CLAUDE.md`, e.g.:
 ```

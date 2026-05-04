@@ -28,6 +28,20 @@ teardown() {
   rm -rf "$TMPDIR_TEST"
 }
 
+# --- tool selection ------------------------------------------------------
+
+@test "ralph.sh advertises claude, codex, and amp as supported tools" {
+  ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
+  grep -qF 'Usage: source ralph.sh [--tool claude|codex|amp]' "$ralph"
+  grep -qF "Must be 'claude', 'codex', or 'amp'." "$ralph"
+}
+
+@test "ralph.sh codex branch uses non-interactive exec rooted at the repo" {
+  ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
+  grep -qF '[[ "$_RALPH_TOOL" == "codex" ]]' "$ralph"
+  grep -qF 'codex --ask-for-approval never --sandbox workspace-write --cd "$_RALPH_PROJECT_ROOT" exec - < "$_RALPH_PROMPT_FILE"' "$ralph"
+}
+
 # --- compute_confidence --------------------------------------------------
 #
 # Single-axis routing: gate=PASS → HIGH, anything else → LOW. The prior

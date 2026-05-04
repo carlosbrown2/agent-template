@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: source ralph.sh [--tool amp|claude] [max_iterations]
+# Usage: source ralph.sh [--tool claude|codex|amp] [max_iterations]
 #
 # State hygiene: every script-scope variable is prefixed with `_RALPH_` and
 # explicitly unset in `_ralph_cleanup` so sourcing the script does not leak
@@ -181,8 +181,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$_RALPH_TOOL" != "amp" && "$_RALPH_TOOL" != "claude" ]]; then
-  echo "Error: Invalid tool '$_RALPH_TOOL'. Must be 'amp' or 'claude'."
+if [[ "$_RALPH_TOOL" != "amp" && "$_RALPH_TOOL" != "claude" && "$_RALPH_TOOL" != "codex" ]]; then
+  echo "Error: Invalid tool '$_RALPH_TOOL'. Must be 'claude', 'codex', or 'amp'."
   _ralph_cleanup
   return 1
 fi
@@ -313,6 +313,9 @@ RETRY_EOF
   # Run the selected tool with the ralph prompt
   if [[ "$_RALPH_TOOL" == "amp" ]]; then
     _RALPH_OUTPUT=$(amp --dangerously-allow-all < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
+  elif [[ "$_RALPH_TOOL" == "codex" ]]; then
+    # Codex CLI: exec mode for non-interactive operation, rooted at the repo.
+    _RALPH_OUTPUT=$(codex --ask-for-approval never --sandbox workspace-write --cd "$_RALPH_PROJECT_ROOT" exec - < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
   else
     # Claude Code: --dangerously-skip-permissions for autonomous operation, --print for output
     _RALPH_OUTPUT=$(claude --dangerously-skip-permissions --print < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
