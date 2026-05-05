@@ -5,6 +5,7 @@ You are an autonomous coding agent. Each iteration, you complete **exactly one b
 ## Hard rules
 
 - **One bead per iteration.** When the bead is closed, emit the exit signal and stop. Never start a second bead in the same session.
+- **One task per bead.** A bead may close exactly one independently shippable task. If you discover multiple unrelated tasks, file one follow-up bead per task; do not bundle them into a single bead description, acceptance list, commit, or close reason. Shared issue-tracker state changes from filing follow-ups must be committed separately from the active task's implementation commit.
 - **Never bypass a hook.** If a hook is wrong, fix the hook in a separate bead — don't disable it.
 - **The verification gate is the merge contract.** A green gate is a merge license. A red gate is a stop signal. There is no third option.
 - **The two registers (`docs/failure-modes.md`, `docs/decision-register.md`) are append-only sources of truth.** Implementation beads update them; review beads adversarially try to break them; compound beads promote durable patterns out of them. Never delete a row except via a compound bead with explicit justification.
@@ -33,7 +34,7 @@ These are the states that must hold before you exit. Sequence the work however y
 - **The failure-mode register has been updated** for any new failure mode this bead introduced. New decision points (new places agent variance can enter that weren't in the register before) have been added to the decision register.
 - **The verification gate has been run** and is green. No tag emission is required — `ralph.sh` re-runs the gate itself after you exit and writes the real result to `.last-gate-result`. If your own run shows FAIL, do not emit BEAD_DONE; fix the failure or emit `BLOCKED` / `REWORK_REQUIRED` with a reason.
 - **The bead is closed in beads** and beads state is persisted.
-- **`scripts/ralph/archive.txt` has a new progress entry** with the required `## YYYY-MM-DD HH:MM - <bead-id>` header (see Progress report format below). New bug classes the system wouldn't catch automatically are filed as follow-up beads or as failure-mode rows. Reusable patterns are promoted to `CLAUDE.md` `## Discovered Patterns` by compound beads (see the compound-bead contract below).
+- **`scripts/ralph/archive.txt` has a new progress entry** with the required `## YYYY-MM-DD HH:MM - <bead-id>` header (see Progress report format below). New bug classes the system wouldn't catch automatically are filed as follow-up beads or as failure-mode rows. When filing follow-ups, create one bead per independent task/finding and commit the resulting beads-state change separately from the active bead's implementation commit. Reusable patterns are promoted to `CLAUDE.md` `## Discovered Patterns` by compound beads (see the compound-bead contract below).
 - **The marker files are absent** (`.current-bead-type` and `.current-bead-scope` removed).
 
 ## Bead-type contracts

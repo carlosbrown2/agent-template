@@ -167,6 +167,77 @@ EOF
   [[ "$output" == *"scripts/typo-not-ignored.txt"* ]]
 }
 
+# --- fm_gate_refs_check --------------------------------------------------
+
+@test "fm_gate_refs_check: accepts covered row whose check file is named directly in the gate" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | boom         | correctness | tests/a.bats | covered |
+EOF
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Verification Gate
+
+```
+bats tests/a.bats
+```
+EOF
+  run fm_gate_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "fm_gate_refs_check: accepts covered row whose check file is under a gated directory" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | boom         | correctness | tests/hooks/parsers.bats::test_boom | covered |
+EOF
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Verification Gate
+
+```
+bats tests/hooks/
+```
+EOF
+  run fm_gate_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "fm_gate_refs_check: rejects covered row whose check is absent from the gate" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | boom         | correctness | tests/forgotten.bats | covered |
+EOF
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Verification Gate
+
+```
+bats tests/hooks/
+```
+EOF
+  run fm_gate_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"tests/forgotten.bats"* ]]
+}
+
+@test "fm_gate_refs_check: ignores non-covered rows" {
+  cat > "$TMPDIR_TEST/fm.md" <<'EOF'
+| Module | Failure mode | Category | Check | Status |
+| mod-a  | impossible   | correctness | tests/not-run.bats | proven-impossible |
+| mod-b  | excluded     | correctness | tests/also-not-run.bats | out-of-scope |
+EOF
+  cat > "$TMPDIR_TEST/CLAUDE.md" <<'EOF'
+## Verification Gate
+
+```
+bats tests/hooks/
+```
+EOF
+  run fm_gate_refs_check "$TMPDIR_TEST/fm.md" "$TMPDIR_TEST/CLAUDE.md"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 # --- dec_required_rows_check ---------------------------------------------
 
 @test "dec_required_rows_check: accepts register with all baseline decisions" {
@@ -482,6 +553,11 @@ EOF
 
 @test "smoke: real docs/failure-modes.md passes fm_file_refs_check" {
   run fm_file_refs_check "$PROJECT_ROOT/docs/failure-modes.md" "$PROJECT_ROOT" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "smoke: real docs/failure-modes.md covered checks are in the verification gate" {
+  run fm_gate_refs_check "$PROJECT_ROOT/docs/failure-modes.md" "$PROJECT_ROOT/CLAUDE.md"
   [ "$status" -eq 0 ]
 }
 

@@ -13,8 +13,11 @@
 # instead of SQLite database
 # no-db: false
 
-# Disable daemon for RPC communication (forces direct database access)
-# no-daemon: false
+# Disable daemon for RPC communication (forces direct database access).
+# This repository is commonly used from multiple local checkouts; direct mode
+# prevents a stale daemon/socket from another checkout serving the wrong
+# .beads/beads.db.
+no-daemon: true
 
 # Disable auto-flush of database to JSONL after mutations
 # no-auto-flush: false

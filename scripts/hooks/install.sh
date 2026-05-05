@@ -292,6 +292,16 @@ if [ -f "$FM_REGISTER" ]; then
     echo "  or correct the path in the register."
     exit 1
   fi
+
+  if ! missing_gate_refs=$(fm_gate_refs_check "$FM_REGISTER" "$PROJECT_ROOT/CLAUDE.md"); then
+    echo "BLOCKED: docs/failure-modes.md covered rows reference checks that are not run by the CLAUDE.md verification gate:"
+    printf '%s\n' "$missing_gate_refs"
+    echo ""
+    echo "  How to fix: add the referenced check file or its parent directory to the"
+    echo "  '## Verification Gate' command in CLAUDE.md, or change the row status to"
+    echo "  proven-impossible / out-of-scope if no mechanical check is required."
+    exit 1
+  fi
 fi
 
 # --- Decision register integrity ---

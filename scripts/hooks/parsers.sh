@@ -131,6 +131,98 @@ fm_file_refs_check() {
   return 0
 }
 
+# fm_covered_check_refs <register-path>
+#
+# Print file references from the Check column of rows whose Status is covered.
+# This intentionally ignores Module / Failure mode prose so a row may name the
+# affected module without requiring that module itself to appear in the gate.
+fm_covered_check_refs() {
+  local fm_register="$1"
+  awk '
+    /^\|/ {
+      line = $0
+      stripped = line
+      gsub(/[|:\- \t]/, "", stripped)
+      if (stripped == "") next
+      if (line ~ /Failure mode/ || line ~ /Status[ \t]*\|/) next
+
+      gsub(/\\\|/, "\034", line)
+      n = split(line, cells, "|")
+      status = cells[n-1]
+      check = cells[n-2]
+      sub(/^[ \t]+/, "", status)
+      sub(/[ \t]+$/, "", status)
+      if (status == "covered") {
+        gsub(/\034/, "\\|", check)
+        print check
+      }
+    }
+  ' "$fm_register" 2>/dev/null \
+    | grep -oE '(tests?|proofs|src|spec|docs|tasks|scripts|lib|pkg)/[a-zA-Z0-9_/.-]+\.[a-zA-Z0-9]+(::[a-zA-Z0-9_]+)?' \
+    | sort -u || true
+}
+
+# gate_ref_covers_file <gate-command> <file-ref>
+#
+# A gate covers a register check when it names the file directly or invokes a
+# parent directory with a trailing slash, e.g. `bats tests/hooks/` covers
+# `tests/hooks/parsers.bats`.
+gate_ref_covers_file() {
+  local gate_cmd="$1"
+  local file_ref="$2"
+  local file_part="${file_ref%%::*}"
+  local dir_part
+  local token
+  local clean_token
+
+  while IFS= read -r token; do
+    clean_token="${token#\"}"
+    clean_token="${clean_token%\"}"
+    clean_token="${clean_token#\'}"
+    clean_token="${clean_token%\'}"
+
+    if [ "$clean_token" = "$file_ref" ] || [ "$clean_token" = "$file_part" ]; then
+      return 0
+    fi
+
+    dir_part="$file_part"
+    while [[ "$dir_part" == */* ]]; do
+      dir_part="${dir_part%/*}"
+      [ -z "$dir_part" ] && break
+      if [ "$clean_token" = "$dir_part/" ]; then
+        return 0
+      fi
+    done
+  done < <(printf '%s\n' "$gate_cmd" | tr '[:space:]' '\n')
+
+  return 1
+}
+
+# fm_gate_refs_check <register-path> <claude-md-path>
+fm_gate_refs_check() {
+  local fm_register="$1"
+  local claude_md="$2"
+  local gate_cmd
+  local missing=""
+  local ref
+
+  gate_cmd=$(gate_command_extract "$claude_md")
+
+  while IFS= read -r ref; do
+    [ -z "$ref" ] && continue
+    if ! gate_ref_covers_file "$gate_cmd" "$ref"; then
+      missing="${missing}
+    ${ref}"
+    fi
+  done < <(fm_covered_check_refs "$fm_register")
+
+  if [ -n "$missing" ]; then
+    printf '%s\n' "$missing"
+    return 1
+  fi
+  return 0
+}
+
 # dec_required_rows_check <register-path>
 dec_required_rows_check() {
   local dec_register="$1"
