@@ -727,6 +727,30 @@ EOF
   [ -z "$output" ]
 }
 
+@test "_ralph_work_summary: trims acceptance criteria from description" {
+  _load_ralph_helpers
+  desc=$'Review finding: noisy output.\n\nACCEPTANCE CRITERIA\n- First thing\n- Second thing'
+  run _ralph_work_summary "$desc"
+  [ "$status" -eq 0 ]
+  [ "$output" = "Review finding: noisy output." ]
+}
+
+@test "_ralph_work_summary: empty description gets fallback summary" {
+  _load_ralph_helpers
+  run _ralph_work_summary ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "No summary provided." ]
+}
+
+@test "_ralph_acceptance_summary: counts criteria and prints only the first brief item" {
+  _load_ralph_helpers
+  desc=$'Context.\n\nACCEPTANCE CRITERIA\n- First criterion is described here.\n- Second criterion is described here.\n- Third criterion is described here.'
+  run _ralph_acceptance_summary "$desc"
+  [ "$status" -eq 0 ]
+  [ "$output" = "3 criteria; first: First criterion is described here.; 2 more" ]
+  [[ "$output" != *"Second criterion"* ]] || { echo "too verbose: $output"; return 1; }
+}
+
 @test "_ralph_load_bead_meta: object response (bd <0.49) populates type/title/desc" {
   # The pre-0.49 shape — `bd show <id> --json` returns a JSON object.
   _load_ralph_helpers
@@ -747,6 +771,15 @@ EOF
   [ "$_RALPH_BEAD_TITLE" = "review: audit foo" ]
   [ "$_RALPH_BEAD_DESCRIPTION" = "R" ]
   [ "$_RALPH_BEAD_TYPE" = "review" ]
+}
+
+@test "_ralph_load_bead_meta: appends separate acceptance_criteria for banner summaries" {
+  _load_ralph_helpers
+  _install_bd_stub '{"title":"impl: foo bar","description":"do the thing","acceptance_criteria":"- First criterion\n- Second criterion","issue_type":"task"}'
+  _ralph_load_bead_meta "any-id"
+  run _ralph_acceptance_summary "$_RALPH_BEAD_DESCRIPTION"
+  [ "$status" -eq 0 ]
+  [ "$output" = "2 criteria; first: First criterion; 1 more" ]
 }
 
 @test "_ralph_load_bead_meta: every loop-taxonomy keyword resolves from the title" {
@@ -786,11 +819,12 @@ EOF
 
 # --- ralph.sh banner shape ---------------------------------------------
 
-@test "ralph.sh banner prints [type] — title and Description line" {
+@test "ralph.sh banner prints title, work summary, and brief acceptance summary" {
   # Extract the banner block (# --- Show upcoming work --- through the
-  # divider line) and eval it under hydrated globals. The bead description
-  # mandates `[type] — title` on its own line and `Description: <desc>` as
-  # a separate line so the operator sees the bead's contract pre-run.
+  # divider line) and eval it under hydrated globals. The banner prints the
+  # title/type plus a trimmed work summary and compact acceptance summary,
+  # not the full bead description.
+  _load_ralph_helpers
   ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
   block=$(awk '
     /^[[:space:]]*# --- Show upcoming work/ { capture=1 }
@@ -803,19 +837,22 @@ EOF
   _ralph_load_bead_meta() {
     _RALPH_BEAD_TYPE="impl"
     _RALPH_BEAD_TITLE="impl: foo"
-    _RALPH_BEAD_DESCRIPTION="some description"
+    _RALPH_BEAD_DESCRIPTION=$'some description\n\nACCEPTANCE CRITERIA\n- First thing\n- Second thing'
   }
   _ralph_bead_ready() { echo "agent-template-xyz"; }
   _RALPH_ACTIVE_BEAD=""
 
   out=$(eval "$block")
   [[ "$out" == *"[impl] — impl: foo"* ]] || { echo "Got: $out"; return 1; }
-  [[ "$out" == *"Description: some description"* ]] || { echo "Got: $out"; return 1; }
+  [[ "$out" == *"Work: some description"* ]] || { echo "Got: $out"; return 1; }
+  [[ "$out" == *"Acceptance: 2 criteria; first: First thing; 1 more"* ]] || { echo "Got: $out"; return 1; }
+  [[ "$out" != *"Second thing"* ]] || { echo "acceptance dump leaked: $out"; return 1; }
 }
 
-@test "ralph.sh banner omits Description line when description is empty" {
-  # Pin that an empty description does not print a bare `Description:` line —
-  # the gating is `[[ -n "$_RALPH_BEAD_DESCRIPTION" ]]`.
+@test "ralph.sh banner uses compact fallback lines when description is empty" {
+  # Empty bead descriptions still keep the banner shape compact and avoid the
+  # old Description line that encouraged full free-form dumps.
+  _load_ralph_helpers
   ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
   block=$(awk '
     /^[[:space:]]*# --- Show upcoming work/ { capture=1 }
@@ -833,6 +870,8 @@ EOF
 
   out=$(eval "$block")
   [[ "$out" == *"[impl] — impl: foo"* ]]
+  [[ "$out" == *"Work: No summary provided."* ]] || { echo "Got: $out"; return 1; }
+  [[ "$out" == *"Acceptance: No explicit criteria found."* ]] || { echo "Got: $out"; return 1; }
   [[ "$out" != *"Description:"* ]] || { echo "spurious Description line: $out"; return 1; }
 }
 

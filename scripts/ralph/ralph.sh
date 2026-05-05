@@ -30,7 +30,8 @@ _ralph_cleanup() {
   unset _RALPH_GATE_RESULT _RALPH_CONFIDENCE _RALPH_POLICY _RALPH_AUTO_LAND
   unset _RALPH_FAILED_BEAD _RALPH_RETRY_STATE _RALPH_RETRY_REST _RALPH_RETRY_ACTION
   unset -f _ralph_cleanup _ralph_bead_in_progress _ralph_bead_ready _ralph_bead_title
-  unset -f _ralph_load_bead_meta _ralph_sanitize_log_field _ralph_emit_log
+  unset -f _ralph_load_bead_meta _ralph_sanitize_log_field _ralph_work_summary
+  unset -f _ralph_acceptance_summary _ralph_emit_log
 }
 
 # --- Bead id extractors ----------------------------------------------------
@@ -76,12 +77,17 @@ _ralph_bead_title() {
 # does not populate BASH_REMATCH by default, so capture-group extraction
 # would crash under `set -u` when the script is sourced from a zsh shell.
 _ralph_load_bead_meta() {
-  local id="$1" j issue_type _kw
+  local id="$1" j issue_type acceptance_criteria _kw
   _RALPH_BEAD_TYPE=""; _RALPH_BEAD_TITLE=""; _RALPH_BEAD_DESCRIPTION=""
   j=$(bd show "$id" --json 2>/dev/null) || return 0
   [ -n "$j" ] || return 0
   _RALPH_BEAD_TITLE=$(jq -r '(if type == "array" then .[0] else . end).title // empty' <<<"$j" 2>/dev/null) || _RALPH_BEAD_TITLE=""
   _RALPH_BEAD_DESCRIPTION=$(jq -r '(if type == "array" then .[0] else . end).description // empty' <<<"$j" 2>/dev/null) || _RALPH_BEAD_DESCRIPTION=""
+  acceptance_criteria=$(jq -r '(if type == "array" then .[0] else . end).acceptance_criteria // empty' <<<"$j" 2>/dev/null) || acceptance_criteria=""
+  if [[ -n "$acceptance_criteria" ]] && ! grep -qi 'acceptance criteria' <<<"$_RALPH_BEAD_DESCRIPTION"; then
+    _RALPH_BEAD_DESCRIPTION+=$'\n\nACCEPTANCE CRITERIA\n'
+    _RALPH_BEAD_DESCRIPTION+="$acceptance_criteria"
+  fi
   issue_type=$(jq -r '(if type == "array" then .[0] else . end).issue_type // empty' <<<"$j" 2>/dev/null) || issue_type=""
   _RALPH_BEAD_TYPE="$issue_type"
   for _kw in pare-down impl review pare compound research; do
@@ -109,6 +115,66 @@ _ralph_sanitize_log_field() {
     s="${s:0:157}..."
   fi
   printf '%s' "$s"
+}
+
+_ralph_work_summary() {
+  local s="$1"
+  s=$(awk '
+    {
+      line = tolower($0)
+      if (line ~ /^[[:space:]]*acceptance[[:space:]]+criteria/) {
+        exit
+      }
+      print
+    }
+  ' <<<"$s" | tr '[:space:]' ' ' | tr -s ' ')
+  s="${s# }"
+  s="${s% }"
+  if [ -z "$s" ]; then
+    s="No summary provided."
+  elif [ "${#s}" -gt 160 ]; then
+    s="${s:0:157}..."
+  fi
+  printf '%s' "$s"
+}
+
+_ralph_acceptance_summary() {
+  local s="$1"
+  awk '
+    {
+      line = tolower($0)
+      if (!in_acceptance && line ~ /^[[:space:]]*acceptance[[:space:]]+criteria/) {
+        in_acceptance = 1
+        next
+      }
+      if (in_acceptance && $0 ~ /^[[:space:]]*[-*][[:space:]]+/) {
+        item = $0
+        sub(/^[[:space:]]*[-*][[:space:]]+/, "", item)
+        gsub(/[[:space:]]+/, " ", item)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", item)
+        if (item != "") {
+          count++
+          if (first == "") {
+            first = item
+          }
+        }
+      }
+    }
+    END {
+      if (count == 0) {
+        print "No explicit criteria found."
+        exit
+      }
+      if (length(first) > 90) {
+        first = substr(first, 1, 87) "..."
+      }
+      printf "%d criteria; first: %s", count, first
+      if (count > 1) {
+        printf "; %d more", count - 1
+      }
+      print ""
+    }
+  ' <<<"$s"
 }
 
 # Emit one confidence.log line. The five exit-routing branches (BLOCKED,
@@ -306,7 +372,8 @@ RETRY_EOF
   if [[ -n "$_RALPH_BEAD_ID" ]]; then
     _ralph_load_bead_meta "$_RALPH_BEAD_ID"
     echo "[$_RALPH_BEAD_TYPE] — $_RALPH_BEAD_TITLE"
-    [[ -n "$_RALPH_BEAD_DESCRIPTION" ]] && echo "Description: $_RALPH_BEAD_DESCRIPTION"
+    echo "Work: $(_ralph_work_summary "$_RALPH_BEAD_DESCRIPTION")"
+    echo "Acceptance: $(_ralph_acceptance_summary "$_RALPH_BEAD_DESCRIPTION")"
   else
     echo "No beads ready — agent will check and emit COMPLETE."
   fi

@@ -19,7 +19,7 @@ jobs:
       - name: Install system deps (bats, shellcheck, jq)
         run: |
           sudo apt-get update
-          sudo apt-get install -y bats shellcheck jq
+          sudo apt-get install -y bats shellcheck jq python3-pip
 
       - name: Install bd (Beads CLI)
         run: |
@@ -37,6 +37,16 @@ jobs:
           export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
           bd --version
 
+      - name: Install CI security scanners
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b "$HOME/.local/bin"
+          python3 -m pip install --user dep-hallucinator
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          gitleaks version
+          dep-hallucinator --help >/dev/null
+
       - name: Show tool versions
         run: |
           bash --version | head -1
@@ -44,17 +54,28 @@ jobs:
           shellcheck --version | head -2
           jq --version
           bd --version
+          gitleaks version
+          dep-hallucinator --help >/dev/null
 
-      - name: Run verification gate (mirrors CLAUDE.md ## Verification Gate)
+      - name: Run fail-closed secrets and dependency checks
         run: |
-          bash -n scripts/ralph/ralph.sh \
-            && bash -n scripts/ralph/lib.sh \
-            && bash -n scripts/hooks/install.sh \
-            && bash -n scripts/hooks/parsers.sh \
-            && shellcheck -x scripts/ralph/ralph.sh scripts/ralph/lib.sh scripts/hooks/install.sh scripts/hooks/parsers.sh \
-            && bd --version 2>/dev/null | grep -qE '^bd version ([1-9]|0\.([3-9]|[1-9][0-9]))' \
-            && bats tests/hooks/ \
-            && bats tests/gate/
+          command -v gitleaks >/dev/null || { echo "BLOCKED: gitleaks is required in CI." >&2; exit 1; }
+          command -v dep-hallucinator >/dev/null || { echo "BLOCKED: dep-hallucinator is required in CI." >&2; exit 1; }
+          gitleaks detect --source . --redact
+          mapfile -t manifests < <(git ls-files 'requirements*.txt' 'package.json' 'pyproject.toml' 'Cargo.toml' 'go.mod')
+          if [ "${#manifests[@]}" -gt 0 ]; then
+            dep-hallucinator check "${manifests[@]}"
+          fi
+
+      - name: Run verification gate from CLAUDE.md
+        run: |
+          source scripts/hooks/parsers.sh
+          GATE_CMD=$(gate_command_extract CLAUDE.md)
+          if [ -z "$GATE_CMD" ]; then
+            echo "BLOCKED: no verification gate found under '## Verification Gate' in CLAUDE.md." >&2
+            exit 1
+          fi
+          bash -c "$GATE_CMD"
 
   # Markdown lint keeps prose drift out of load-bearing files (CLAUDE.md,
   # prompt.md, the registers). Relaxed config — line length and inline HTML

@@ -56,6 +56,48 @@ teardown() {
   grep -qE 'GATE_CMD=\$\(gate_command_extract "\$CLAUDE_MD"\)' "$installer"
 }
 
+@test "CI workflow extracts and runs the CLAUDE.md verification gate" {
+  # CI must run the same gate command as Ralph and the pre-push hook. A
+  # hand-copied gate chain here would drift from CLAUDE.md and turn CI into a
+  # separate contract.
+  local workflow="$PROJECT_ROOT/.github/workflows/ci.yml"
+  grep -qF 'source scripts/hooks/parsers.sh' "$workflow"
+  grep -qF 'GATE_CMD=$(gate_command_extract CLAUDE.md)' "$workflow"
+  grep -qF 'bash -c "$GATE_CMD"' "$workflow"
+  grep -qF "BLOCKED: no verification gate found under '## Verification Gate' in CLAUDE.md." "$workflow"
+}
+
+@test "CI workflow does not manually mirror the verification gate chain" {
+  local workflow="$PROJECT_ROOT/.github/workflows/ci.yml"
+
+  run awk '
+    /name: Run verification gate/ { in_step = 1; next }
+    in_step && /^[[:space:]]+- name:/ { in_step = 0 }
+    in_step && /bash -n scripts\/ralph\/ralph.sh/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$workflow"
+  [ "$status" -ne 0 ]
+}
+
+@test "CI workflow installs security scanners before running checks" {
+  local workflow="$PROJECT_ROOT/.github/workflows/ci.yml"
+  grep -qF 'name: Install CI security scanners' "$workflow"
+  grep -qF 'raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh' "$workflow"
+  grep -qF 'python3 -m pip install --user dep-hallucinator' "$workflow"
+  grep -qF 'gitleaks version' "$workflow"
+  grep -qF 'dep-hallucinator --help >/dev/null' "$workflow"
+}
+
+@test "CI workflow runs secrets and dependency scanners fail-closed" {
+  local workflow="$PROJECT_ROOT/.github/workflows/ci.yml"
+  grep -qF 'name: Run fail-closed secrets and dependency checks' "$workflow"
+  grep -qF 'command -v gitleaks >/dev/null || { echo "BLOCKED: gitleaks is required in CI."' "$workflow"
+  grep -qF 'command -v dep-hallucinator >/dev/null || { echo "BLOCKED: dep-hallucinator is required in CI."' "$workflow"
+  grep -qF 'gitleaks detect --source . --redact' "$workflow"
+  grep -qF "git ls-files 'requirements*.txt' 'package.json' 'pyproject.toml' 'Cargo.toml' 'go.mod'" "$workflow"
+  grep -qF 'dep-hallucinator check "${manifests[@]}"' "$workflow"
+}
+
 @test "install.sh does not re-inline the Verification Gate awk extractor" {
   # The anchored-awk pattern `/^## Verification Gate[[:space:]]*$/` is the
   # unique signature of the extractor. It belongs in scripts/hooks/parsers.sh
