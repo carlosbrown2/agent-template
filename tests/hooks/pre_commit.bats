@@ -20,6 +20,10 @@ if [ "$1" = "--no-daemon" ] && [ "$2" = "list" ] && [ "$3" = "--status=in_progre
   printf '[{"id":"agent-template-3ne"}]'
   exit 0
 fi
+if [ "$1" = "--no-daemon" ] && [ "$2" = "list" ] && [ "$3" = "--json" ]; then
+  printf '[]'
+  exit 0
+fi
 echo "unexpected bd invocation: $*" >&2
 exit 1
 EOF

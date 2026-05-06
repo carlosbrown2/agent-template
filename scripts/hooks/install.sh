@@ -10,7 +10,8 @@
 #   5. Scope enforcement
 #   6. Failure-mode register integrity
 #   7. Decision register integrity
-#   8. CLAUDE.md model-tag validator
+#   8. Bead graph phase-order guard
+#   9. CLAUDE.md model-tag validator
 #
 # Also installed:
 #   commit-msg: enforces "<type>: [bead-id] - <title>" format on bead commits
@@ -396,6 +397,34 @@ if [ -f "$DEC_REGISTER" ]; then
   fi
 fi
 
+# --- Bead graph phase-order guard ---
+# Phase 2 says the dependency graph must make `bd ready` a sensible starting
+# set, but until this guard existed that requirement lived only in prose.
+# That let later-phase review / pare / compound beads be created without the
+# blocking edges that make the intended order real in the tracker. Check the
+# live bd graph directly and fail closed on bd/jq errors too: if we cannot
+# inspect the queue shape, we should not bless a commit that may strand Ralph
+# on a bad ready set.
+if command -v bd >/dev/null 2>&1; then
+  if ! bead_graph_issues=$(bead_phase_dependency_check 2>&1); then
+    echo "BLOCKED: phase-labeled unfinished beads are missing prerequisite dependency edges."
+    echo ""
+    echo "  Every review / pare / compound bead must encode its execution order in bd,"
+    echo "  not just in human intent. Otherwise 'bd ready' can surface later-phase work"
+    echo "  before earlier-phase work has run."
+    echo ""
+    echo "  Offending beads (or bd extraction error):"
+    printf '%s\n' "$bead_graph_issues" | awk 'NF { print "    " $0 }'
+    echo ""
+    echo "  How to fix:"
+    echo "    - review:   add at least one blocking impl dependency"
+    echo "    - pare:     add at least one blocking review dependency"
+    echo "    - compound: add at least one blocking review or pare dependency"
+    echo "    - use: bd dep add <blocked-id> <blocker-id>"
+    exit 1
+  fi
+fi
+
 # --- CLAUDE.md model-tag validator ---
 if git diff --cached --name-only | grep -qx 'CLAUDE.md'; then
   if ! bad_patterns=$(claude_model_tags_check "$PROJECT_ROOT/CLAUDE.md"); then
@@ -571,6 +600,7 @@ chmod +x "$GIT_HOOKS_DIR/pre-push"
 echo "Hooks installed successfully."
 echo "  - Pre-commit: Bead type fail-closed gate (active — requires .current-bead-type when a bead is in_progress)"
 echo "  - Pre-commit: Scope enforcement (active — requires .current-bead-scope for impl/pare/compound beads)"
+echo "  - Pre-commit: Phase-order bead graph guard (active — review/pare/compound beads need prerequisite bd deps)"
 echo "  - Pre-commit: Failure-mode register integrity (active — fires only if docs/failure-modes.md exists)"
 echo "  - Pre-commit: Decision register integrity + bounding-mechanism file refs (active — fires only if docs/decision-register.md exists)"
 echo "  - Pre-commit: CLAUDE.md model-tag validator (active — fires only if CLAUDE.md is staged)"

@@ -18,6 +18,122 @@ teardown() {
   rm -rf "$TMPDIR_TEST"
 }
 
+setup_mock_bd_graph() {
+  BIN_DIR="$TMPDIR_TEST/bin"
+  mkdir -p "$BIN_DIR"
+  PATH="$BIN_DIR:$PATH"
+  export PATH
+
+  cat > "$BIN_DIR/bd" <<EOF
+#!/bin/bash
+if [ "\$1" = "--no-daemon" ] && [ "\$2" = "list" ] && [ "\$3" = "--json" ]; then
+  cat "$TMPDIR_TEST/list.json"
+  exit 0
+fi
+if [ "\$1" = "--no-daemon" ] && [ "\$2" = "dep" ] && [ "\$3" = "list" ] && [ "\$5" = "--json" ]; then
+  cat "$TMPDIR_TEST/dep-\$4.json"
+  exit 0
+fi
+echo "unexpected bd invocation: \$*" >&2
+exit 1
+EOF
+  chmod +x "$BIN_DIR/bd"
+}
+
+# --- bead_phase_dependency_check ------------------------------------------
+
+@test "bead_phase_dependency_check: accepts review with impl dep, pare with review dep, compound with review dep" {
+  setup_mock_bd_graph
+  cat > "$TMPDIR_TEST/list.json" <<'EOF'
+[
+  {"id":"story-impl","title":"impl: add feature","status":"open"},
+  {"id":"story-review","title":"review: review feature","status":"open"},
+  {"id":"story-pare","title":"pare: simplify feature","status":"open"},
+  {"id":"story-compound","title":"compound: promote feature learnings","status":"open"}
+]
+EOF
+  printf '[]\n' > "$TMPDIR_TEST/dep-story-impl.json"
+  cat > "$TMPDIR_TEST/dep-story-review.json" <<'EOF'
+[
+  {"id":"story-impl","title":"impl: add feature","dependency_type":"blocks"}
+]
+EOF
+  cat > "$TMPDIR_TEST/dep-story-pare.json" <<'EOF'
+[
+  {"id":"story-review","title":"review: review feature","dependency_type":"blocks"}
+]
+EOF
+  cat > "$TMPDIR_TEST/dep-story-compound.json" <<'EOF'
+[
+  {"id":"story-review","title":"review: review feature","dependency_type":"blocks"}
+]
+EOF
+
+  run bead_phase_dependency_check
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "bead_phase_dependency_check: rejects review bead without impl dep" {
+  setup_mock_bd_graph
+  cat > "$TMPDIR_TEST/list.json" <<'EOF'
+[
+  {"id":"story-review","title":"review: review feature","status":"open"}
+]
+EOF
+  printf '[]\n' > "$TMPDIR_TEST/dep-story-review.json"
+
+  run bead_phase_dependency_check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"story-review: review bead must depend on at least one impl: bead"* ]]
+}
+
+@test "bead_phase_dependency_check: rejects pare-down bead without review dep" {
+  setup_mock_bd_graph
+  cat > "$TMPDIR_TEST/list.json" <<'EOF'
+[
+  {"id":"story-pare","title":"pare-down: simplify feature","status":"open"}
+]
+EOF
+  printf '[]\n' > "$TMPDIR_TEST/dep-story-pare.json"
+
+  run bead_phase_dependency_check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"story-pare: pare bead must depend on at least one review: bead"* ]]
+}
+
+@test "bead_phase_dependency_check: rejects compound bead without review or pare dep" {
+  setup_mock_bd_graph
+  cat > "$TMPDIR_TEST/list.json" <<'EOF'
+[
+  {"id":"story-compound","title":"compound: promote feature learnings","status":"open"}
+]
+EOF
+  cat > "$TMPDIR_TEST/dep-story-compound.json" <<'EOF'
+[
+  {"id":"story-impl","title":"impl: add feature","dependency_type":"blocks"}
+]
+EOF
+
+  run bead_phase_dependency_check
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"story-compound: compound bead must depend on at least one review: or pare: bead"* ]]
+}
+
+@test "bead_phase_dependency_check: ignores closed phase-labeled beads" {
+  setup_mock_bd_graph
+  cat > "$TMPDIR_TEST/list.json" <<'EOF'
+[
+  {"id":"story-review","title":"review: review feature","status":"closed"}
+]
+EOF
+  printf '[]\n' > "$TMPDIR_TEST/dep-story-review.json"
+
+  run bead_phase_dependency_check
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
 # --- fm_status_check -----------------------------------------------------
 
 @test "fm_status_check: accepts register with all valid statuses" {

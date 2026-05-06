@@ -16,6 +16,7 @@ setup() {
   git -C "$TEST_REPO" config user.name "Test User"
 
   printf '[]\n' > "$TMPDIR_TEST/bd-state.json"
+  printf '[]\n' > "$TMPDIR_TEST/bd-list.json"
   printf '0\n' > "$TMPDIR_TEST/gitleaks-status"
   printf '0\n' > "$TMPDIR_TEST/dep-status"
 
@@ -27,6 +28,14 @@ if [ "\$1" = "--version" ]; then
 fi
 if [ "\$1" = "--no-daemon" ] && [ "\$2" = "list" ] && [ "\$3" = "--status=in_progress" ] && [ "\$4" = "--json" ]; then
   cat "$TMPDIR_TEST/bd-state.json"
+  exit 0
+fi
+if [ "\$1" = "--no-daemon" ] && [ "\$2" = "list" ] && [ "\$3" = "--json" ]; then
+  cat "$TMPDIR_TEST/bd-list.json"
+  exit 0
+fi
+if [ "\$1" = "--no-daemon" ] && [ "\$2" = "dep" ] && [ "\$3" = "list" ] && [ "\$5" = "--json" ]; then
+  cat "$TMPDIR_TEST/dep-\$4.json"
   exit 0
 fi
 echo "unexpected bd invocation: \$*" >&2
@@ -82,6 +91,14 @@ git_commit() {
 set_in_progress_bead() {
   printf '[{"id":"agent-template-3ne"}]\n' > "$TMPDIR_TEST/bd-state.json"
   printf '%s\n' "$1" > "$TEST_REPO/.current-bead-type"
+}
+
+set_mock_graph_issue() {
+  local id="$1"
+  local title="$2"
+  local dep_json="$3"
+  printf '[{"id":"%s","title":"%s","status":"open"}]\n' "$id" "$title" > "$TMPDIR_TEST/bd-list.json"
+  printf '%s\n' "$dep_json" > "$TMPDIR_TEST/dep-$id.json"
 }
 
 @test "generated pre-commit blocks out-of-scope impl commits and permits in-scope commits" {
@@ -175,4 +192,15 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"gate-failed"* ]]
   [[ "$output" == *"BLOCKED: verification gate failed on pre-push"* ]]
+}
+
+@test "generated pre-commit blocks phase-labeled bead graph with missing prerequisite deps" {
+  set_mock_graph_issue "agent-template-r1v" "review: review hardening arc" '[]'
+  printf 'touch\n' > "$TEST_REPO/.beads-touch"
+  git -C "$TEST_REPO" add .beads-touch
+
+  run git_commit "chore: touch bead graph state"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BLOCKED: phase-labeled unfinished beads are missing prerequisite dependency edges."* ]]
+  [[ "$output" == *"agent-template-r1v: review bead must depend on at least one impl: bead"* ]]
 }

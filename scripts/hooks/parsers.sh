@@ -56,6 +56,98 @@ bd_bead_in_progress() {
   return 0
 }
 
+bead_phase_from_title() {
+  local title="$1"
+  case "$title" in
+    review:*) printf 'review' ;;
+    pare:*) printf 'pare' ;;
+    pare-down:*) printf 'pare' ;;
+    compound:*) printf 'compound' ;;
+    *) return 1 ;;
+  esac
+}
+
+# bead_phase_dependency_check
+#
+# Fail closed when unfinished phase-labeled beads are missing the dependency
+# edges that make `bd ready` a sensible execution queue. The bug class is not
+# "bad title wording" — it is "the intended order lives in human intent while
+# the tracker still exposes later-phase work as ready." Bind this to the real
+# bd graph, not to prose about the graph.
+#
+# Rules enforced for open / in_progress phase-labeled beads:
+#   review:*     -> must depend on at least one impl:* bead
+#   pare:*       -> must depend on at least one review:* bead
+#   pare-down:*  -> must depend on at least one review:* bead
+#   compound:*   -> must depend on at least one review:* or pare:* bead
+#
+# Returns 0 on pass, 1 on failure or bd/jq extraction error. Prints offending
+# bead ids + reasons to stdout on structural failure; bd/jq failures go to
+# stderr so callers can distinguish "invalid graph" from "could not inspect".
+bead_phase_dependency_check() {
+  command -v bd >/dev/null 2>&1 || return 0
+
+  local raw id title status phase deps missing=""
+  if ! raw=$(bd --no-daemon list --json 2>/dev/null); then
+    echo "bd list --json failed" >&2
+    return 1
+  fi
+  [ -z "$raw" ] && return 0
+  if ! jq -e 'type == "array"' <<<"$raw" >/dev/null 2>&1; then
+    echo "bd list produced non-parseable JSON" >&2
+    return 1
+  fi
+
+  while IFS=$'\t' read -r id title status; do
+    [ -z "$id" ] && continue
+    case "$status" in
+      open|in_progress) ;;
+      *) continue ;;
+    esac
+
+    if ! phase=$(bead_phase_from_title "$title"); then
+      continue
+    fi
+
+    if ! deps=$(bd --no-daemon dep list "$id" --json 2>/dev/null); then
+      echo "bd dep list $id --json failed" >&2
+      return 1
+    fi
+    deps="${deps:-[]}"
+    if ! jq -e 'type == "array"' <<<"$deps" >/dev/null 2>&1; then
+      echo "bd dep list $id produced non-parseable JSON" >&2
+      return 1
+    fi
+
+    case "$phase" in
+      review)
+        if ! jq -e '[.[] | select(.dependency_type == "blocks") | .title // "" | test("^impl:")] | any' <<<"$deps" >/dev/null 2>&1; then
+          missing="${missing}
+    ${id}: review bead must depend on at least one impl: bead"
+        fi
+        ;;
+      pare)
+        if ! jq -e '[.[] | select(.dependency_type == "blocks") | .title // "" | test("^review:")] | any' <<<"$deps" >/dev/null 2>&1; then
+          missing="${missing}
+    ${id}: pare bead must depend on at least one review: bead"
+        fi
+        ;;
+      compound)
+        if ! jq -e '[.[] | select(.dependency_type == "blocks") | .title // "" | test("^(review:|pare:|pare-down:)")] | any' <<<"$deps" >/dev/null 2>&1; then
+          missing="${missing}
+    ${id}: compound bead must depend on at least one review: or pare: bead"
+        fi
+        ;;
+    esac
+  done < <(jq -r '.[] | [.id // "", .title // "", .status // ""] | @tsv' <<<"$raw")
+
+  if [ -n "$missing" ]; then
+    printf '%s\n' "$missing"
+    return 1
+  fi
+  return 0
+}
+
 # fm_status_check <register-path>
 fm_status_check() {
   local fm_register="$1"

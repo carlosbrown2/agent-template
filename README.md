@@ -34,7 +34,7 @@ The initializer walks you through 5 phases. Each phase is an outcome contract �
 ### The 5 Phases
 
 1. **Spec** — Done when the PRD, both registers, the review rubric, the verification gate, and the structural hooks all exist and you've approved them.
-2. **Beads** — Done when every PRD acceptance criterion is covered by a bead, every bead has a declared file scope, and you've approved the dependency graph. Each story decomposes into the quartet `impl → review → pare-down → compound`.
+2. **Beads** — Done when every PRD acceptance criterion is covered by a bead, every bead has a declared file scope, and you've approved the dependency graph. Each story decomposes into the quartet `impl → review → pare-down → compound`, and later-phase beads must encode that order in explicit `bd` dependencies so `bd ready` exposes a sensible starting set.
 3. **Implementation (Ralph Loop)** — Done when every bead is closed, every commit passed the verification gate, and both registers stayed complete. Each iteration is a fresh agent session that completes exactly one bead and stops.
 4. **Holistic Review** — Done when an adversarial cross-cutting review has tried to falsify every claim in both registers, and either failed (good) or filed a bead per finding.
 5. **Final Compound** — Done when every rule that mattered is enforced structurally (not in prose), every bug class has a regression test, and the kickoff prompt has been updated with anything the next project would benefit from.
@@ -149,7 +149,7 @@ These appear after the first ralph iteration and are **not** shipped with the te
 
 ### Pre-commit hooks (installed by `./scripts/hooks/install.sh`)
 
-Eight pre-commit hooks ship enabled, plus a commit-msg format hook and a pre-push gate hook. Each row is a failure class the register has seen at least once:
+Nine pre-commit hooks ship enabled, plus a commit-msg format hook and a pre-push gate hook. Each row is a failure class the register has seen at least once:
 
 | Hook | What it enforces |
 |---|---|
@@ -160,6 +160,7 @@ Eight pre-commit hooks ship enabled, plus a commit-msg format hook and a pre-pus
 | Scope enforcement | `impl`/`pare`/`compound` beads must declare `.current-bead-scope`; commits outside the scope are rejected (infrastructure paths exempted; compound beads also get `CLAUDE.md`, `docs/skills/`, and `tests/regression/`). |
 | Failure-mode register integrity | Every row in `docs/failure-modes.md` is single-line, its last cell holds an acceptable Status (`covered`/`proven-impossible`/`out-of-scope`), and every referenced check file exists on disk. |
 | Decision register integrity | `docs/decision-register.md` has all baseline rows; every row is single-line with ≥5 columns and a last-cell Status of `bounded`/`ritual-bounded`/`agent-discretion`/`escalation-only`; every referenced bounding-mechanism file exists on disk. |
+| Bead graph phase-order guard | Open `review:` / `pare:` / `compound:` beads must carry prerequisite `bd` dependency edges so `bd ready` cannot surface later-phase work out of order. |
 | CLAUDE.md model-tag validator | Every `### ` entry under `## Discovered Patterns` carries an anchored `model:` tag identifying its source model so the pattern can be retired or re-validated on model upgrade. |
 
 Two more hooks ship as separate git-hook files:

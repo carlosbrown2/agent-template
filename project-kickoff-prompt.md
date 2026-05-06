@@ -60,7 +60,7 @@ Each row must be a single line — multi-line visual continuations are not parse
 | Acceptance interpretation | every "is it done" call   | every PRD criterion expressible as test/type/proof                                | PRD review at Phase 1; re-validate on PRD edit                                    | ritual-bounded   |
 | Review verdict            | review beads              | severity rubric in docs/skills/review-rubric.md; review-bead contract mandates each finding cite a clause | review-bead contract in scripts/ralph/prompt.md; human read of docs/reviews/<bead-id>.md | ritual-bounded   |
 | Pattern extraction        | compound beads            | every promoted pattern carries a `model:` tag and a retire-on-upgrade rule        | CLAUDE.md model-tag validator hook                                                | bounded          |
-| Decomposition             | Phase 2                   | bead schema: scope, deps, criteria, size, register DoD                            | beads CLI + human dep-graph review at Phase 2                                     | ritual-bounded   |
+| Decomposition             | Phase 2                   | phase-labeled work encodes execution order in explicit `bd` dependency edges so `bd ready` can only surface a sensible starting set | pre-commit bead-graph phase-order guard in scripts/hooks/install.sh + human dep-graph review at Phase 2 | bounded          |
 | Tool / search choice      | execution                 | unconstrained — model picks                                                       | none (rationale: search strategy is exactly where we want model freedom)          | agent-discretion |
 | Model upgrade drift       | model swap                | every promoted pattern tagged with source model; retire unless re-validated       | upgrade ritual: re-run both registers under the new model before resuming         | ritual-bounded   |
 | Scope creep               | every commit              | `.current-bead-scope` declares allowed paths; infrastructure paths always allowed | scope enforcement hook                                                            | bounded          |
@@ -123,7 +123,7 @@ Done when **all** of the following hold and I have approved the bead graph:
 - Every PRD acceptance criterion is covered by at least one bead.
 - Every bead has a declared file scope (the scope enforcement hook is on by default).
 - Every bead is small enough to finish in a single fresh agent context window.
-- The dependency graph has no cycles. `bd ready --json` returns a sensible starting set.
+- The dependency graph has no cycles. `bd ready --json` returns a sensible starting set, and the pre-commit bead-graph guard rejects later-phase `review:` / `pare:` / `compound:` work that is missing prerequisite `bd` edges.
 - Every implementation bead has, as part of its definition-of-done, an update to the failure-mode register for the module it touches.
 - Every implementation bead that introduces a new decision point (a new place agent variance can enter) has, as part of its DoD, an update to the decision register.
 - Cross-cutting checks that span multiple stories (e.g., a single property-test file covering invariants from several modules) get their own bead with its own quartet.
