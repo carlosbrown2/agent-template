@@ -45,7 +45,9 @@ teardown() {
 @test "ralph.sh codex branch uses non-interactive exec rooted at the repo" {
   ralph="$PROJECT_ROOT/scripts/ralph/ralph.sh"
   grep -qF '[[ "$_RALPH_TOOL" == "codex" ]]' "$ralph"
-  grep -qF 'codex --ask-for-approval never --sandbox workspace-write --cd "$_RALPH_PROJECT_ROOT" exec - < "$_RALPH_PROMPT_FILE"' "$ralph"
+  grep -qF -e '--ask-for-approval never --sandbox workspace-write' "$ralph"
+  grep -qF -e '--cd "$_RALPH_PROJECT_ROOT" exec - < "$_RALPH_PROMPT_FILE"' "$ralph"
+  grep -qF 'sandbox_workspace_write.writable_roots=[\"${_RALPH_PROJECT_ROOT}/.git\"]' "$ralph"
 }
 
 # --- extract_promise_signal ---------------------------------------------

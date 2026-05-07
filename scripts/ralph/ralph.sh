@@ -404,7 +404,12 @@ RETRY_EOF
     _RALPH_OUTPUT=$(amp --dangerously-allow-all < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
   elif [[ "$_RALPH_TOOL" == "codex" ]]; then
     # Codex CLI: exec mode for non-interactive operation, rooted at the repo.
-    _RALPH_OUTPUT=$(codex --ask-for-approval never --sandbox workspace-write --cd "$_RALPH_PROJECT_ROOT" exec - < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
+    # The workspace-write sandbox keeps `.git/` read-only by default, which
+    # blocks `git add` / `git commit` at the bead-completion boundary.
+    _RALPH_OUTPUT=$(codex \
+      -c "sandbox_workspace_write.writable_roots=[\"${_RALPH_PROJECT_ROOT}/.git\"]" \
+      --ask-for-approval never --sandbox workspace-write \
+      --cd "$_RALPH_PROJECT_ROOT" exec - < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
   else
     # Claude Code: --dangerously-skip-permissions for autonomous operation, --print for output
     _RALPH_OUTPUT=$(claude --dangerously-skip-permissions --print < "$_RALPH_PROMPT_FILE" 2>&1 | tee /dev/stderr) || true

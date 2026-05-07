@@ -1410,3 +1410,23 @@ Started: Tue Apr 21 12:26:09 MDT 2026
   - When stranded work must be separated without losing it, preserving an exact patch artifact is safer than bundling it into the next bead.
   - Mixed-worktree blockers can hide more than one task; file a follow-up bead per independent preserved diff instead of rolling them together.
 ---
+## 2026-05-06 18:54 - agent-template-xvh
+- Type: impl
+- What was done
+- Landed the preserved Codex writable-roots fix in revised form by extending the `workspace-write` sandbox to include `${_RALPH_PROJECT_ROOT}/.git`, which keeps `git add` and `git commit` viable inside Ralph's Codex loop without broadening the rest of the sandbox.
+- Tightened `tests/hooks/ralph.bats` so the Codex branch must keep both the non-interactive `codex exec` shape and the explicit writable-roots override.
+- Retired `docs/reviews/agent-template-7ss-preserved.patch` after the accepted portion of that artifact became live code and register rows.
+- Files changed
+- .beads/issues.jsonl
+- docs/decision-register.md
+- docs/failure-modes.md
+- docs/reviews/agent-template-7ss-preserved.patch
+- scripts/ralph/archive.txt
+- scripts/ralph/ralph.sh
+- tests/hooks/ralph.bats
+- Register updates: failure-modes rows added: 1 | decision rows added: 1
+- **Learnings for future iterations:**
+  - Codex `workspace-write` is not enough for autonomous git workflows; Ralph must explicitly grant `.git` write access or the bead will stall at commit time.
+  - The preserved patch was directionally right, but deleting the git-index fallback and environment-blocker routing was a separate decision and did not belong in this bead.
+  - For sandbox fixes, pin the exact CLI configuration string in tests so a future refactor cannot silently reintroduce the original permission failure.
+---
